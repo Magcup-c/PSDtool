@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { listen } from '@tauri-apps/api/event';
@@ -63,14 +63,20 @@ interface LayerItemProps {
     siblings: any[];
     radioEnabled: boolean;
     lockedEnabled: boolean;
-    expandedKeys: Set<string>;
+    // Set全体ではなく「自分が閉じているか」の boolean のみ受け取る。
+    // これにより React.memo が props の浅い比較で正しく動作し、
+    // 全展開/全閉じ時に自分の isClosed が変わったノードだけ再レンダーされる。
+    isClosed: boolean;
+    // 子ノードの isClosed を解決するためのルックアップ関数。
+    // Set を渡すと参照が毎回変わって memo が無効化されるため関数形式にする。
+    isChildClosed: (childKey: string) => boolean;
     onToggleExpand: (key: string) => void;
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
     onRadioSelect: (path: number[], siblings: any[]) => void;
 }
 
-const LayerThumbnail = ({ canvas, hasChildren }: { canvas?: HTMLCanvasElement; hasChildren: boolean }) => {
+const LayerThumbnail = memo(({ canvas, hasChildren }: { canvas?: HTMLCanvasElement; hasChildren: boolean }) => {
     const dataUrl = useMemo(() => {
         if (!canvas) return null;
         try {
@@ -83,11 +89,7 @@ const LayerThumbnail = ({ canvas, hasChildren }: { canvas?: HTMLCanvasElement; h
     return (
         <div className="layer-preview-thumbnail">
             {dataUrl ? (
-                <img
-                    src={dataUrl}
-                    alt=""
-                    className="layer-thumbnail-img"
-                />
+                <img src={dataUrl} alt="" className="layer-thumbnail-img" />
             ) : hasChildren ? (
                 <FolderIcon size={16} className="text-muted" fill="currentColor" fillOpacity={0.1} />
             ) : (
@@ -95,37 +97,40 @@ const LayerThumbnail = ({ canvas, hasChildren }: { canvas?: HTMLCanvasElement; h
             )}
         </div>
     );
-};
+});
 
-const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, expandedKeys, onToggleExpand, onToggle, onRename, onRadioSelect }: LayerItemProps) => {
+const LayerItem = memo(({ layer, path, siblings, radioEnabled, lockedEnabled, isClosed, isChildClosed, onToggleExpand, onToggle, onRename, onRadioSelect }: LayerItemProps) => {
     const key = path.join('-');
     const hasChildren = layer.children && layer.children.length > 0;
-    // expandedKeys は「閉じているグループのキー集合」
-    // キーが含まれていれば閉じている、含まれていなければ展開（デフォルト展開）
-    const isClosed = expandedKeys.has(key);
 
     const name = layer.name || '';
     const isRadio = radioEnabled && name.startsWith('*');
     const isLocked = lockedEnabled && name.startsWith('!');
     const displayName = (isRadio || isLocked) ? name.slice(1) : name;
 
-    const handleVisibilityClick = () => {
+    const handleVisibilityClick = useCallback(() => {
         if (isLocked) return;
         if (isRadio) {
             onRadioSelect(path, siblings);
         } else {
             onToggle(path);
         }
-    };
+    }, [isLocked, isRadio, onRadioSelect, onToggle, path, siblings]);
+
+    const handleExpandClick = useCallback(() => {
+        onToggleExpand(key);
+    }, [onToggleExpand, key]);
+
+    const handleRename = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const prefix = isRadio ? '*' : isLocked ? '!' : '';
+        onRename(path, prefix + e.target.value);
+    }, [isRadio, isLocked, onRename, path]);
 
     return (
         <li className="layer-node">
             <div className={`layer-item ${isLocked ? 'layer-locked' : ''} ${isRadio ? 'layer-radio' : ''}`}>
                 {hasChildren ? (
-                    <button
-                        className="toggle-expand"
-                        onClick={() => onToggleExpand(key)}
-                    >
+                    <button className="toggle-expand" onClick={handleExpandClick}>
                         {!isClosed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </button>
                 ) : (
@@ -155,10 +160,7 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, expande
                     type="text"
                     className="layer-name-input"
                     value={displayName}
-                    onChange={(e) => {
-                        const prefix = isRadio ? '*' : isLocked ? '!' : '';
-                        onRename(path, prefix + e.target.value);
-                    }}
+                    onChange={handleRename}
                     placeholder={hasChildren ? 'New Group' : 'New Layer'}
                 />
             </div>
@@ -168,15 +170,17 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, expande
                     {[...(layer.children || [])].reverse().map((child: any, i: number) => {
                         const originalIndex = (layer.children.length - 1) - i;
                         const childPath = [...path, originalIndex];
+                        const childKey = childPath.join('-');
                         return (
                             <LayerItem
-                                key={`${path.join('-')}-${originalIndex}`}
+                                key={childKey}
                                 layer={child}
                                 path={childPath}
                                 siblings={layer.children}
                                 radioEnabled={radioEnabled}
                                 lockedEnabled={lockedEnabled}
-                                expandedKeys={expandedKeys}
+                                isClosed={isChildClosed(childKey)}
+                                isChildClosed={isChildClosed}
                                 onToggleExpand={onToggleExpand}
                                 onToggle={onToggle}
                                 onRename={onRename}
@@ -188,7 +192,7 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, expande
             )}
         </li>
     );
-};
+});
 
 const PsdEditor = () => {
     const [psd, setPsd] = useState<Psd | null>(null);
@@ -252,6 +256,13 @@ const PsdEditor = () => {
         if (!psd?.children) return;
         setClosedKeys(new Set(collectGroupKeys(psd.children)));
     }, [psd, collectGroupKeys]);
+
+    // closedKeys の Set を直接渡すと参照が毎回変わり memo が無効化されるため、
+    // useCallback で安定した関数参照にしてルックアップを提供する。
+    // closedKeys が変わったときだけ新しい関数が生成される。
+    const isChildClosed = useCallback((childKey: string) => {
+        return closedKeys.has(childKey);
+    }, [closedKeys]);
 
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
         setNotification({ message, type });
@@ -737,7 +748,8 @@ const PsdEditor = () => {
                                             siblings={psd.children!}
                                             radioEnabled={radioEnabled}
                                             lockedEnabled={lockedEnabled}
-                                            expandedKeys={closedKeys}
+                                            isClosed={closedKeys.has(String(originalIndex))}
+                                            isChildClosed={isChildClosed}
                                             onToggleExpand={handleToggleExpand}
                                             onToggle={toggleLayerVisibility}
                                             onRename={renameLayer}
