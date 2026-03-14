@@ -209,10 +209,14 @@ const PsdEditor = () => {
     // 「閉じているグループのキー集合」。キーは path.join('-')。
     // 含まれていれば閉じ、含まれていなければ展開（デフォルト展開）。
     const [closedKeys, setClosedKeys] = useState<Set<string>>(new Set());
-    // FIX #1: HTMLElement → HTMLElement のより具体的な型へ（section 要素は HTMLElement で問題ないが
-    // wheel イベントリスナー等の型安全性のため明示）
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const previewRef = useRef<HTMLElement>(null);
+    // アンドゥ履歴スタック。psd の過去スナップショットを積む。
+    // state にすると履歴変更自体が再レンダーを呼ぶため ref で管理する。
+    const undoStack = useRef<Psd[]>([]);
+    const redoStack = useRef<Psd[]>([]);
+    // 常に最新の psd を保持する ref（キーボードハンドラの stale closure 対策）
+    const psdRef = useRef<Psd | null>(null);
 
     const appWindow = getCurrentWindow();
 
@@ -267,6 +271,62 @@ const PsdEditor = () => {
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
         setNotification({ message, type });
     };
+
+    // psdRef を常に最新の psd と同期させる
+    useEffect(() => { psdRef.current = psd; }, [psd]);
+
+    const MAX_UNDO = 50;
+
+    // psd を更新しつつ現在値をアンドゥスタックに積む。
+    // ロード時など履歴に積みたくない場合は直接 setPsd を使う。
+    const commitPsd = useCallback((next: Psd) => {
+        const current = psdRef.current;
+        if (!current) return;
+        undoStack.current = [
+            ...undoStack.current.slice(-(MAX_UNDO - 1)),
+            current,
+        ];
+        // 新しい操作をしたらリドゥ履歴は無効化する
+        redoStack.current = [];
+        setPsd(next);
+    }, []);
+
+    const handleUndo = useCallback(() => {
+        if (undoStack.current.length === 0) return;
+        const current = psdRef.current;
+        if (current) redoStack.current = [...redoStack.current, current];
+        const prev = undoStack.current.pop()!;
+        setPsd(prev);
+    }, []);
+
+    const handleRedo = useCallback(() => {
+        if (redoStack.current.length === 0) return;
+        const current = psdRef.current;
+        if (current) undoStack.current = [...undoStack.current, current];
+        const next = redoStack.current.pop()!;
+        setPsd(next);
+    }, []);
+
+    const handleCopyCanvas = useCallback(async () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        try {
+            await new Promise<void>((resolve, reject) => {
+                canvas.toBlob(async (blob) => {
+                    if (!blob) { reject(new Error('toBlob failed')); return; }
+                    try {
+                        await navigator.clipboard.write([
+                            new ClipboardItem({ 'image/png': blob })
+                        ]);
+                        resolve();
+                    } catch (e) { reject(e); }
+                }, 'image/png');
+            });
+            showToast('Copied to clipboard!');
+        } catch (err) {
+            showToast(`Copy failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+        }
+    }, []);
 
     // ロード時に * プレフィックスのラジオグループを正規化する。
     // 各兄弟レイヤー配列を走査し、* レイヤーが複数ある場合は
@@ -367,6 +427,39 @@ const PsdEditor = () => {
         return () => preview.removeEventListener('wheel', handleWheel);
     }, []);
 
+    // Ctrl+Z（アンドゥ）/ Ctrl+Shift+Z・Ctrl+Y（リドゥ）/ Ctrl+C（クリップボードコピー）
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            const tag = (e.target as HTMLElement).tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+            if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+                e.preventDefault();
+                handleUndo();
+                return;
+            }
+
+            if (
+                (e.key === 'y' && (e.ctrlKey || e.metaKey)) ||
+                (e.key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey)
+            ) {
+                e.preventDefault();
+                handleRedo();
+                return;
+            }
+
+            if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+                const sel = window.getSelection();
+                if (sel && sel.toString().length > 0) return;
+                e.preventDefault();
+                handleCopyCanvas();
+            }
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [handleUndo, handleRedo, handleCopyCanvas]);
+
     const handleOpenFile = async () => {
         try {
             const selected = await open({
@@ -466,13 +559,37 @@ const PsdEditor = () => {
     const toggleLayerVisibility = (path: number[]) => {
         if (!psd) return;
         const updated = updateLayerByPath(psd, path, (layer) => ({ ...layer, hidden: !layer.hidden }));
-        setPsd(updated);
+        commitPsd(updated);
     };
 
+    // リネームは1文字ごとに commitPsd すると履歴が溢れるため、
+    // 連続入力の最初の1打鍵時に「変更前」スナップショットを積み、
+    // 600ms 入力が止まったらタイマーをリセットして次の編集を別エントリにする。
+    const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const renameBaseRef = useRef<Psd | null>(null); // 連続入力前のスナップショット
     const renameLayer = (path: number[], newName: string) => {
         if (!psd) return;
         const updated = updateLayerByPath(psd, path, (layer) => ({ ...layer, name: newName }));
+
+        if (!renameTimerRef.current) {
+            // 連続入力の先頭: 変更前を履歴に積み、リドゥ履歴は無効化
+            renameBaseRef.current = psd;
+            undoStack.current = [
+                ...undoStack.current.slice(-(MAX_UNDO - 1)),
+                psd,
+            ];
+            redoStack.current = [];
+        } else {
+            clearTimeout(renameTimerRef.current);
+        }
+
         setPsd(updated);
+
+        // 600ms 無入力で連続入力セッション終了
+        renameTimerRef.current = setTimeout(() => {
+            renameTimerRef.current = null;
+            renameBaseRef.current = null;
+        }, 600);
     };
 
     // FIX #3 & #6: selectedIdx は path の末尾（グローバルツリー上のインデックス）。
@@ -501,7 +618,7 @@ const PsdEditor = () => {
         });
 
         if (currentPsd !== psd) {
-            setPsd(currentPsd);
+            commitPsd(currentPsd);
         }
     };
 
