@@ -796,6 +796,7 @@ canvas {
     justify-content: center;
     opacity: 0.7;
 }
+
 /* Radio indicator replaces the Eye icon for '*' layers */
 .radio-indicator {
     width: 12px;
@@ -883,4 +884,22 @@ canvas {
     background: var(--accent-glow);
     color: var(--accent);
     border-color: var(--accent);
+}
+
+/* スピナー（Loader2 アイコン用） */
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Undo/Redo 非活性状態 */
+.btn-disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: none;
 }

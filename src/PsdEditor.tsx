@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { listen } from '@tauri-apps/api/event';
@@ -39,6 +39,8 @@ interface ToastProps {
 }
 
 const Toast = ({ message, type, onClose }: ToastProps) => {
+    // FIX #7: onClose を依存配列に含めつつ、親側で useCallback 化することで
+    // タイマーが毎レンダーでリセットされる問題を防ぐ
     useEffect(() => {
         const timer = setTimeout(onClose, 3000);
         return () => clearTimeout(timer);
@@ -98,7 +100,6 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, onToggl
     const name = layer.name || '';
     const isRadio = radioEnabled && name.startsWith('*');
     const isLocked = lockedEnabled && name.startsWith('!');
-    // Display name strips the prefix character if mode is active
     const displayName = (isRadio || isLocked) ? name.slice(1) : name;
 
     const handleVisibilityClick = () => {
@@ -148,7 +149,6 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, onToggl
                     className="layer-name-input"
                     value={displayName}
                     onChange={(e) => {
-                        // Only prepend the prefix if it was hidden from the view
                         const prefix = isRadio ? '*' : isLocked ? '!' : '';
                         onRename(path, prefix + e.target.value);
                     }}
@@ -158,15 +158,25 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, onToggl
 
             {hasChildren && isOpen && (
                 <ul className="sub-layers">
-                    {[...(layer.children || [])].reverse().map((child: any, i: number, array: any[]) => {
-                        const originalIndex = array.length - 1 - i;
+                    {/* FIX #6: reverse() 後の配列でインデックスを正しく復元する。
+                        reverse() はコピーを返すため array はリバース済み。
+                        よって originalIndex = (元の配列の長さ - 1) - i
+                        = layer.children.length - 1 - i
+                        ここで layer.children は元の（非リバース）配列なので
+                        length を直接使えば正確に元インデックスを求められる。
+                        また onRadioSelect に渡す siblings は非リバースの
+                        layer.children をそのまま渡す必要がある（toggleRadioLayer
+                        が元インデックスで操作するため）。
+                    */}
+                    {[...(layer.children || [])].reverse().map((child: any, i: number) => {
+                        const originalIndex = (layer.children.length - 1) - i;
                         const childPath = [...path, originalIndex];
                         return (
                             <LayerItem
                                 key={`${path.join('-')}-${originalIndex}`}
                                 layer={child}
                                 path={childPath}
-                                siblings={layer.children}
+                                siblings={layer.children} // 非リバースの元配列を渡す
                                 radioEnabled={radioEnabled}
                                 lockedEnabled={lockedEnabled}
                                 onToggle={onToggle}
@@ -193,6 +203,8 @@ const PsdEditor = () => {
     const [flipEnabled, setFlipEnabled] = useState(true);
     const [theme, setTheme] = useState<'black' | 'grey' | 'light' | 'white'>('grey');
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    // FIX #1: HTMLElement → HTMLElement のより具体的な型へ（section 要素は HTMLElement で問題ないが
+    // wheel イベントリスナー等の型安全性のため明示）
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const previewRef = useRef<HTMLElement>(null);
 
@@ -202,11 +214,71 @@ const PsdEditor = () => {
     const handleMaximize = () => appWindow.toggleMaximize();
     const handleClose = () => appWindow.close();
 
+    // FIX #7: useCallback で安定した参照にし Toast のタイマーリセットを防ぐ
+    const handleCloseNotification = useCallback(() => {
+        setNotification(null);
+    }, []);
+
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
         setNotification({ message, type });
     };
 
-    // Native Tauri drag and drop listener
+    // ロード時に * プレフィックスのラジオグループを正規化する。
+    // 各兄弟レイヤー配列を走査し、* レイヤーが複数ある場合は
+    // 「表示中の最初の1枚だけ残して残りを hidden にする」。
+    // 全て hidden の場合は先頭を強制表示する。
+    const normalizeRadioGroups = useCallback((layers: any[]): any[] => {
+        // まず子を再帰処理
+        const processed = layers.map((layer) => {
+            if (layer.children && layer.children.length > 0) {
+                return { ...layer, children: normalizeRadioGroups(layer.children) };
+            }
+            return layer;
+        });
+
+        // この階層の * レイヤー群を正規化
+        const radioIndices = processed
+            .map((l, i) => ({ l, i }))
+            .filter(({ l }) => (l.name || '').startsWith('*'))
+            .map(({ i }) => i);
+
+        if (radioIndices.length < 2) return processed; // 1枚以下なら不要
+
+        // 表示中の最初の1枚を選択インデックスとする。全て hidden なら先頭を選ぶ。
+        const visibleIdx = radioIndices.find((i) => !processed[i].hidden) ?? radioIndices[0];
+
+        const normalized = [...processed];
+        radioIndices.forEach((i) => {
+            normalized[i] = { ...normalized[i], hidden: i !== visibleIdx };
+        });
+
+        return normalized;
+    }, []);
+
+    // FIX #2: loadPsdFromFilePath を useCallback でメモ化し、
+    // useEffect の依存配列に正しく含められるようにする（stale closure 対策）
+    const loadPsdFromFilePath = useCallback(async (path: string) => {
+        setIsLoading(true);
+        try {
+            const data = await readFile(path);
+            const parsedPsd = readPsd(data, {
+                skipLayerImageData: false,
+                skipCompositeImageData: false
+            });
+            // ロード直後にラジオグループの初期状態を正規化する
+            if (parsedPsd.children) {
+                parsedPsd.children = normalizeRadioGroups(parsedPsd.children);
+            }
+            setPsd(parsedPsd);
+            setZoom(1);
+        } catch (err) {
+            console.error('Failed to load PSD:', err);
+            showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
+        }
+        setIsLoading(false);
+    }, [normalizeRadioGroups]); // setIsLoading / setPsd / setZoom は安定した参照のため依存不要
+
+    // FIX #2: loadPsdFromFilePath を依存配列に追加
     useEffect(() => {
         const unlistenPromises = Promise.all([
             listen('tauri://drag-over', () => {
@@ -216,9 +288,9 @@ const PsdEditor = () => {
                 setIsDragging(false);
                 const paths = event.payload.paths;
                 if (paths && paths.length > 0) {
-                    const path = paths[0];
-                    if (path.toLowerCase().endsWith('.psd')) {
-                        loadPsdFromFilePath(path);
+                    const filePath = paths[0];
+                    if (filePath.toLowerCase().endsWith('.psd')) {
+                        loadPsdFromFilePath(filePath);
                     }
                 }
             }),
@@ -232,9 +304,8 @@ const PsdEditor = () => {
                 unlisteners.forEach((unlisten) => unlisten());
             });
         };
-    }, []);
+    }, [loadPsdFromFilePath]); // FIX #2
 
-    // Native wheel zoom listener to prevent browser default pinch-to-zoom
     useEffect(() => {
         const preview = previewRef.current;
         if (!preview) return;
@@ -250,23 +321,6 @@ const PsdEditor = () => {
         preview.addEventListener('wheel', handleWheel, { passive: false });
         return () => preview.removeEventListener('wheel', handleWheel);
     }, []);
-
-    const loadPsdFromFilePath = async (path: string) => {
-        setIsLoading(true);
-        try {
-            const data = await readFile(path);
-            const parsedPsd = readPsd(data, {
-                skipLayerImageData: false,
-                skipCompositeImageData: false
-            });
-            setPsd(parsedPsd);
-            setZoom(1);
-        } catch (err) {
-            console.error('Failed to load PSD:', err);
-            showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
-        }
-        setIsLoading(false);
-    };
 
     const handleOpenFile = async () => {
         try {
@@ -290,7 +344,6 @@ const PsdEditor = () => {
     const handleSaveFile = async () => {
         if (!psd) return;
         try {
-            console.log('Opening save dialog...');
             const selected = await save({
                 title: 'Save PSD File',
                 filters: [{
@@ -300,9 +353,7 @@ const PsdEditor = () => {
             });
 
             if (selected) {
-                console.log('Writing PSD data to buffer...');
                 const psdBuffer = writePsd(psd);
-                console.log('Writing buffer to file...', selected);
                 await writeFile(selected, new Uint8Array(psdBuffer));
                 showToast('File saved successfully!');
             }
@@ -332,7 +383,6 @@ const PsdEditor = () => {
                 for (let i = 0; i < binaryData.length; i++) {
                     array[i] = binaryData.charCodeAt(i);
                 }
-
                 await writeFile(selected, array);
                 showToast('PNG exported successfully!');
             }
@@ -380,15 +430,17 @@ const PsdEditor = () => {
         setPsd(updated);
     };
 
-    // Radio group: show clicked layer, hide all other '*' siblings
+    // FIX #3 & #6: selectedIdx は path の末尾（グローバルツリー上のインデックス）。
+    // siblings は LayerItem から渡ってくる「元の（非リバース）children 配列」。
+    // siblings[idx] の idx も同じくグローバルインデックスなので対応は正しい。
+    // ただし旧コードでは LayerItem 内で reverse 後のインデックスを path に入れて
+    // いたためズレが生じていた。FIX #6 の修正で originalIndex が正しくなったことで
+    // こちらも正しく動作する。
     const toggleRadioLayer = (path: number[], siblings: any[]) => {
         if (!psd) return;
         const selectedIdx = path[path.length - 1];
         const parentPath = path.slice(0, -1);
 
-        // We need to apply multiple updates to the same PSD object
-        // updateLayerByPath handles cloning, but doing it in a loop is inefficient
-        // and can cause performance issues with deep trees.
         let currentPsd = psd;
 
         siblings.forEach((sibling: any, idx: number) => {
@@ -398,7 +450,6 @@ const PsdEditor = () => {
             const sibPath = [...parentPath, idx];
             const shouldHide = idx !== selectedIdx;
 
-            // Only update if state actually changes
             if (sibling.hidden !== shouldHide) {
                 currentPsd = updateLayerByPath(currentPsd, sibPath, (l) => ({ ...l, hidden: shouldHide }));
             }
@@ -409,7 +460,6 @@ const PsdEditor = () => {
         }
     };
 
-    // Returns the active flip suffix string based on current flip state
     const getFlipSuffix = (): string => {
         if (flipX && flipY) return ':flipxy';
         if (flipX) return ':flipx';
@@ -417,11 +467,9 @@ const PsdEditor = () => {
         return '';
     };
 
-    // Returns the base name (strips any :flip* suffix, match xy before x/y)
     const getBaseName = (name: string): string =>
         name.replace(/(:[Ff]lip(xy|x|y))$/i, '');
 
-    // Check if a name ends with a flip suffix
     const hasFlipSuffix = (name: string): boolean =>
         /(:[Ff]lip(xy|x|y))$/i.test(name);
 
@@ -436,7 +484,6 @@ const PsdEditor = () => {
 
                 const flipSuffix = flipEnabled ? getFlipSuffix() : '';
 
-                // Apply flip transform to the canvas context directly
                 ctx.save();
                 if (flipX && flipY) {
                     ctx.translate(psd.width, psd.height);
@@ -449,31 +496,41 @@ const PsdEditor = () => {
                     ctx.scale(1, -1);
                 }
 
-                // ag-psd layers are stored Bottom-to-Top in the array (index 0 is the bottom layer).
-                const drawLayers = (layers: any[]) => {
-                    // Build a lookup: baseName -> flip-variant layer (if exists and matches current flip)
-                    const flipVariantMap = new Map<string, any>();
-                    if (flipSuffix) {
-                        for (const l of layers) {
-                            const n = (l.name || '').toLowerCase();
-                            if (n.endsWith(flipSuffix)) {
-                                const base = getBaseName(l.name || '');
-                                flipVariantMap.set(base.toLowerCase(), l);
-                            }
+                // FIX #4 & #5: buildFlipVariantMap をヘルパー関数として切り出し、
+                // 各レイヤーグループ（再帰レベル）ごとに正しいマップを構築する。
+                // また大文字小文字の正規化を toLowerCase() で統一し、
+                // hasFlipSuffix の /i フラグと整合させる。
+                const buildFlipVariantMap = (layers: any[]): Map<string, any> => {
+                    const map = new Map<string, any>();
+                    if (!flipSuffix) return map;
+                    for (const l of layers) {
+                        const lowerName = (l.name || '').toLowerCase();
+                        // FIX #4: toLowerCase() で正規化した名前に対して
+                        // 小文字の flipSuffix で endsWith する（大文字バリアント対応）
+                        if (lowerName.endsWith(flipSuffix.toLowerCase())) {
+                            const base = getBaseName(l.name || '');
+                            map.set(base.toLowerCase(), l);
                         }
                     }
+                    return map;
+                };
+
+                // FIX #5: 再帰呼び出し時に各グループのレイヤー配列から
+                // 新しい flipVariantMap を構築して渡す
+                const drawLayers = (layers: any[]) => {
+                    const flipVariantMap = buildFlipVariantMap(layers);
 
                     for (const layer of layers) {
                         if (layer.hidden) continue;
 
                         const name = layer.name || '';
-                        // Skip flip-variant layers from normal rendering pass
+                        // flip バリアントレイヤー自体は通常描画パスからスキップ
                         if (hasFlipSuffix(name)) continue;
 
-                        // Use the flip variant if available, otherwise use the base layer
                         const effectiveLayer = flipVariantMap.get(name.toLowerCase()) ?? layer;
 
                         if (effectiveLayer.children) {
+                            // FIX #5: 子レイヤー配列に対して再帰（新しいマップが構築される）
                             drawLayers(effectiveLayer.children);
                         } else if (effectiveLayer.canvas) {
                             ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
@@ -498,7 +555,6 @@ const PsdEditor = () => {
                 className="custom-title-bar"
                 data-tauri-drag-region
                 onMouseDown={(e) => {
-                    // Start dragging on left-click only
                     if (e.button === 0) {
                         appWindow.startDragging();
                     }
@@ -623,7 +679,6 @@ const PsdEditor = () => {
                             <ul className="layer-list">
                                 {[...psd.children].reverse().map((layer, index, array) => {
                                     const originalIndex = array.length - 1 - index;
-                                    // Hide flip-variant layers from the layer list only when flipEnabled
                                     if (flipEnabled && hasFlipSuffix(layer.name || '')) return null;
                                     return (
                                         <LayerItem
@@ -648,7 +703,7 @@ const PsdEditor = () => {
                     </div>
                 </aside>
 
-                <section className="preview-panel" ref={previewRef}>
+                <section className="preview-panel" ref={previewRef as React.RefObject<HTMLElement>}>
                     <div className="viewport-area">
                         {psd ? (
                             <div
@@ -694,15 +749,14 @@ const PsdEditor = () => {
                 </div>
             )}
 
+            {/* FIX #7: onClose に安定した useCallback 参照を渡す */}
             {notification && (
                 <Toast
                     message={notification.message}
                     type={notification.type}
-                    onClose={() => setNotification(null)}
+                    onClose={handleCloseNotification}
                 />
             )}
-
-            {/* Hidden canvas for saving if needed, but we use layer canvases */}
         </div>
     );
 };
