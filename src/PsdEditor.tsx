@@ -433,22 +433,22 @@ const PsdEditor = () => {
             const tag = (e.target as HTMLElement).tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
-            if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+            if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
                 e.preventDefault();
                 handleUndo();
                 return;
             }
 
             if (
-                (e.key === 'y' && (e.ctrlKey || e.metaKey)) ||
-                (e.key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey)
+                (e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) ||
+                (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey)
             ) {
                 e.preventDefault();
                 handleRedo();
                 return;
             }
 
-            if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+            if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey)) {
                 const sel = window.getSelection();
                 if (sel && sel.toString().length > 0) return;
                 e.preventDefault();
