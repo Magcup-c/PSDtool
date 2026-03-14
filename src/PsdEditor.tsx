@@ -28,7 +28,9 @@ import {
     FlipVertical2,
     Asterisk,
     Pin,
-    Replace
+    Replace,
+    ChevronsDownUp,
+    ChevronsUpDown
 } from 'lucide-react';
 import './PsdEditor.css';
 
@@ -61,6 +63,8 @@ interface LayerItemProps {
     siblings: any[];
     radioEnabled: boolean;
     lockedEnabled: boolean;
+    expandedKeys: Set<string>;
+    onToggleExpand: (key: string) => void;
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
     onRadioSelect: (path: number[], siblings: any[]) => void;
@@ -93,9 +97,12 @@ const LayerThumbnail = ({ canvas, hasChildren }: { canvas?: HTMLCanvasElement; h
     );
 };
 
-const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, onToggle, onRename, onRadioSelect }: LayerItemProps) => {
-    const [isOpen, setIsOpen] = useState(true);
+const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, expandedKeys, onToggleExpand, onToggle, onRename, onRadioSelect }: LayerItemProps) => {
+    const key = path.join('-');
     const hasChildren = layer.children && layer.children.length > 0;
+    // expandedKeys は「閉じているグループのキー集合」
+    // キーが含まれていれば閉じている、含まれていなければ展開（デフォルト展開）
+    const isClosed = expandedKeys.has(key);
 
     const name = layer.name || '';
     const isRadio = radioEnabled && name.startsWith('*');
@@ -117,9 +124,9 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, onToggl
                 {hasChildren ? (
                     <button
                         className="toggle-expand"
-                        onClick={() => setIsOpen(!isOpen)}
+                        onClick={() => onToggleExpand(key)}
                     >
-                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {!isClosed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </button>
                 ) : (
                     <span className="spacer" />
@@ -156,18 +163,8 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, onToggl
                 />
             </div>
 
-            {hasChildren && isOpen && (
+            {hasChildren && !isClosed && (
                 <ul className="sub-layers">
-                    {/* FIX #6: reverse() 後の配列でインデックスを正しく復元する。
-                        reverse() はコピーを返すため array はリバース済み。
-                        よって originalIndex = (元の配列の長さ - 1) - i
-                        = layer.children.length - 1 - i
-                        ここで layer.children は元の（非リバース）配列なので
-                        length を直接使えば正確に元インデックスを求められる。
-                        また onRadioSelect に渡す siblings は非リバースの
-                        layer.children をそのまま渡す必要がある（toggleRadioLayer
-                        が元インデックスで操作するため）。
-                    */}
                     {[...(layer.children || [])].reverse().map((child: any, i: number) => {
                         const originalIndex = (layer.children.length - 1) - i;
                         const childPath = [...path, originalIndex];
@@ -176,9 +173,11 @@ const LayerItem = ({ layer, path, siblings, radioEnabled, lockedEnabled, onToggl
                                 key={`${path.join('-')}-${originalIndex}`}
                                 layer={child}
                                 path={childPath}
-                                siblings={layer.children} // 非リバースの元配列を渡す
+                                siblings={layer.children}
                                 radioEnabled={radioEnabled}
                                 lockedEnabled={lockedEnabled}
+                                expandedKeys={expandedKeys}
+                                onToggleExpand={onToggleExpand}
                                 onToggle={onToggle}
                                 onRename={onRename}
                                 onRadioSelect={onRadioSelect}
@@ -203,6 +202,9 @@ const PsdEditor = () => {
     const [flipEnabled, setFlipEnabled] = useState(true);
     const [theme, setTheme] = useState<'black' | 'grey' | 'light' | 'white'>('grey');
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    // 「閉じているグループのキー集合」。キーは path.join('-')。
+    // 含まれていれば閉じ、含まれていなければ展開（デフォルト展開）。
+    const [closedKeys, setClosedKeys] = useState<Set<string>>(new Set());
     // FIX #1: HTMLElement → HTMLElement のより具体的な型へ（section 要素は HTMLElement で問題ないが
     // wheel イベントリスナー等の型安全性のため明示）
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -218,6 +220,38 @@ const PsdEditor = () => {
     const handleCloseNotification = useCallback(() => {
         setNotification(null);
     }, []);
+
+    // 個別トグル
+    const handleToggleExpand = useCallback((key: string) => {
+        setClosedKeys(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    }, []);
+
+    // ツリーに存在する全グループキーを収集する
+    const collectGroupKeys = useCallback((layers: any[], parentPath: number[] = []): string[] => {
+        const keys: string[] = [];
+        layers.forEach((layer, idx) => {
+            if (layer.children && layer.children.length > 0) {
+                const path = [...parentPath, idx];
+                keys.push(path.join('-'));
+                keys.push(...collectGroupKeys(layer.children, path));
+            }
+        });
+        return keys;
+    }, []);
+
+    const handleExpandAll = useCallback(() => {
+        setClosedKeys(new Set()); // 全キーを削除 = 全展開
+    }, []);
+
+    const handleCollapseAll = useCallback(() => {
+        if (!psd?.children) return;
+        setClosedKeys(new Set(collectGroupKeys(psd.children)));
+    }, [psd, collectGroupKeys]);
 
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
         setNotification({ message, type });
@@ -646,7 +680,22 @@ const PsdEditor = () => {
                 <aside className="layer-panel">
                     <div className="panel-header">
                         <h2>Layers</h2>
-                        <Layers size={16} className="text-muted" />
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                            <button
+                                className="toggle-expand"
+                                onClick={handleExpandAll}
+                                title="Expand all groups"
+                            >
+                                <ChevronsUpDown size={14} />
+                            </button>
+                            <button
+                                className="toggle-expand"
+                                onClick={handleCollapseAll}
+                                title="Collapse all groups"
+                            >
+                                <ChevronsDownUp size={14} />
+                            </button>
+                        </div>
                     </div>
                     <div className="layer-mode-bar">
                         <button
@@ -688,6 +737,8 @@ const PsdEditor = () => {
                                             siblings={psd.children!}
                                             radioEnabled={radioEnabled}
                                             lockedEnabled={lockedEnabled}
+                                            expandedKeys={closedKeys}
+                                            onToggleExpand={handleToggleExpand}
                                             onToggle={toggleLayerVisibility}
                                             onRename={renameLayer}
                                             onRadioSelect={toggleRadioLayer}
