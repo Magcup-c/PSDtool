@@ -418,8 +418,14 @@ const PsdEditor = () => {
         const handleWheel = (e: WheelEvent) => {
             if (e.ctrlKey) {
                 e.preventDefault();
-                const delta = e.deltaY > 0 ? -0.1 : 0.1;
-                setZoom(prev => Math.max(0.1, Math.min(5, prev + delta)));
+                // deltaY の大きさに比例させる（トラックパッド・マウス両対応）
+                // deltaMode=1 はライン単位なので px 換算する
+                const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+                // 感度係数: 100px スクロールで約 20% ズーム変化
+                const factor = 1 - raw * 0.002;
+                setZoom(prev => Math.min(5, Math.max(0.1,
+                    Math.round(prev * factor * 100) / 100
+                )));
             }
         };
 
