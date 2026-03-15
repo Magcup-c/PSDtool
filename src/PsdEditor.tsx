@@ -987,6 +987,11 @@ const PsdEditor = () => {
                 <div
                     className="preview-panel"
                     ref={scrollRef}
+                    style={{
+                        overflow: 'scroll',
+                        scrollbarWidth: 'none',       // Firefox
+                        msOverflowStyle: 'none',      // IE/Edge
+                    } as React.CSSProperties}
                 >
                     {psd ? (
                         <div className="preview-scroll-inner" style={{

@@ -1,102 +1,122 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,400&display=swap');
 
-/* ─────────────────────────────────────
-   Tokens — Default dark (grey)
-───────────────────────────────────── */
+/* =============================================================================
+   DESIGN TOKENS — Default (grey theme)
+   各テーマで上書きする変数をここで定義
+============================================================================= */
 :root {
-    --bg: #141414;
-    --bg-panel: #111111;
-    --bg-header: #141414;
-    --bg-titlebar: #0e0e0e;
-    --bg-surface: #1c1c1c;
-    --bg-row: #1c1c1c;
-
-    --accent: #e8ff47;
-    --accent-fg: #0e0e0e;
-    --accent-sub: rgba(232, 255, 71, .1);
-
-    --fg: #f0f0f0;
-    --fg-2: #888;
-    --fg-3: #444;
-
-    --line: #252525;
-    --line-mid: #2e2e2e;
-
-    --hover: rgba(255, 255, 255, .04);
-    --active: rgba(232, 255, 71, .08);
-
-    --r: 4px;
-    --t: 120ms ease;
-}
-
-/* ─────────────────────────────────────
-   Theme variants
-───────────────────────────────────── */
-.theme-black {
-    --bg: #000;
-    --bg-panel: #050505;
-    --bg-header: #000;
-    --bg-titlebar: #000;
-    --bg-surface: #111;
-    --line: #1a1a1a;
-    --line-mid: #222;
-}
-
-.theme-grey {
+    /* Backgrounds */
     --bg: #1a1a1a;
     --bg-panel: #161616;
     --bg-header: #1a1a1a;
     --bg-titlebar: #131313;
-    --bg-surface: #222;
+    --bg-surface: #222222;
+
+    /* Accent */
+    --accent: #e8ff47;
+    --accent-fg: #0e0e0e;
+    --accent-sub: rgba(232, 255, 71, 0.1);
+
+    /* Foreground */
+    --fg: #f0f0f0;
+    --fg-2: #888888;
+    --fg-3: #444444;
+
+    /* Lines */
     --line: #2c2c2c;
-    --line-mid: #333;
+    --line-mid: #333333;
+
+    /* States */
+    --hover: rgba(255, 255, 255, 0.04);
+    --active: rgba(232, 255, 71, 0.08);
+
+    /* Misc */
+    --r: 4px;
+    --t: 120ms ease;
 }
 
+/* =============================================================================
+   THEME VARIANTS
+   各テーマに明確な個性を持たせる
+============================================================================= */
+
+/* Black — 完全な漆黒。アクセントは青紫系 */
+.theme-black {
+    --bg: #000000;
+    --bg-panel: #080808;
+    --bg-header: #000000;
+    --bg-titlebar: #000000;
+    --bg-surface: #101010;
+
+    --accent: #a78bfa;
+    --accent-fg: #0a0a0a;
+    --accent-sub: rgba(167, 139, 250, 0.1);
+    --active: rgba(167, 139, 250, 0.1);
+
+    --fg: #e0e0e0;
+    --fg-2: #666666;
+    --fg-3: #333333;
+
+    --line: #1a1a1a;
+    --line-mid: #222222;
+
+    --hover: rgba(255, 255, 255, 0.03);
+}
+
+/* Grey — デフォルト。アクセントは黄緑（:root と同じ） */
+.theme-grey {
+    /* :root の値をそのまま使用 */
+}
+
+/* Light — ミッドグレー背景。アクセントはオレンジ */
 .theme-light {
-    --bg: #f2f2f2;
-    --bg-panel: #fafafa;
-    --bg-header: #f2f2f2;
-    --bg-titlebar: #e8e8e8;
-    --bg-surface: #fff;
+    --bg: #e8e8e8;
+    --bg-panel: #f0f0f0;
+    --bg-header: #e8e8e8;
+    --bg-titlebar: #d8d8d8;
+    --bg-surface: #ffffff;
 
-    --accent: #111;
-    --accent-fg: #f2f2f2;
-    --accent-sub: rgba(0, 0, 0, .06);
+    --accent: #f97316;
+    --accent-fg: #ffffff;
+    --accent-sub: rgba(249, 115, 22, 0.1);
+    --active: rgba(249, 115, 22, 0.08);
 
-    --fg: #111;
-    --fg-2: #666;
-    --fg-3: #bbb;
+    --fg: #1a1a1a;
+    --fg-2: #555555;
+    --fg-3: #aaaaaa;
 
-    --line: #e0e0e0;
-    --line-mid: #d0d0d0;
-    --hover: rgba(0, 0, 0, .04);
-    --active: rgba(0, 0, 0, .06);
+    --line: #d0d0d0;
+    --line-mid: #c0c0c0;
+
+    --hover: rgba(0, 0, 0, 0.05);
 }
 
+/* White — 純白。アクセントは青 */
 .theme-white {
-    --bg: #fff;
-    --bg-panel: #fafafa;
-    --bg-header: #fff;
-    --bg-titlebar: #f5f5f5;
-    --bg-surface: #fff;
+    --bg: #ffffff;
+    --bg-panel: #f8f8f8;
+    --bg-header: #ffffff;
+    --bg-titlebar: #f0f0f0;
+    --bg-surface: #ffffff;
 
-    --accent: #111;
-    --accent-fg: #fff;
-    --accent-sub: rgba(0, 0, 0, .05);
+    --accent: #3b82f6;
+    --accent-fg: #ffffff;
+    --accent-sub: rgba(59, 130, 246, 0.1);
+    --active: rgba(59, 130, 246, 0.08);
 
     --fg: #0a0a0a;
-    --fg-2: #555;
-    --fg-3: #bbb;
+    --fg-2: #555555;
+    --fg-3: #bbbbbb;
 
     --line: #e8e8e8;
-    --line-mid: #ddd;
-    --hover: rgba(0, 0, 0, .03);
-    --active: rgba(0, 0, 0, .05);
+    --line-mid: #dedede;
+
+    --hover: rgba(0, 0, 0, 0.03);
 }
 
-/* ─────────────────────────────────────
-   Reset
-───────────────────────────────────── */
+/* =============================================================================
+   RESET
+============================================================================= */
 *,
 *::before,
 *::after {
@@ -113,9 +133,9 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
-/* ─────────────────────────────────────
-   Root
-───────────────────────────────────── */
+/* =============================================================================
+   ROOT LAYOUT
+============================================================================= */
 .psd-editor {
     display: flex;
     flex-direction: column;
@@ -123,9 +143,15 @@ body {
     background: var(--bg);
 }
 
-/* ─────────────────────────────────────
-   Title bar
-───────────────────────────────────── */
+.editor-main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* =============================================================================
+   TITLE BAR
+============================================================================= */
 .custom-title-bar {
     height: 32px;
     min-height: 32px;
@@ -151,7 +177,7 @@ body {
     font-family: 'DM Mono', monospace;
     font-size: 9px;
     font-weight: 500;
-    letter-spacing: .16em;
+    letter-spacing: 0.16em;
     color: var(--fg-3);
     text-transform: uppercase;
 }
@@ -160,6 +186,7 @@ body {
     color: var(--accent);
 }
 
+/* Window control buttons */
 .window-controls {
     display: flex;
     height: 100%;
@@ -173,18 +200,16 @@ body {
     justify-content: center;
     background: transparent;
     border: none;
+    border-radius: 0;
     padding: 0;
     color: var(--fg-3);
     cursor: pointer;
     transition: background var(--t), color var(--t);
-    border-radius: 0;
 }
 
 .control-btn:hover {
     background: var(--hover);
     color: var(--fg);
-    transform: none;
-    box-shadow: none;
 }
 
 .control-btn.close:hover {
@@ -192,9 +217,9 @@ body {
     color: #fff;
 }
 
-/* ─────────────────────────────────────
-   Header
-───────────────────────────────────── */
+/* =============================================================================
+   HEADER
+============================================================================= */
 .editor-header {
     height: 44px;
     min-height: 44px;
@@ -217,14 +242,14 @@ body {
 .editor-header h1 {
     font-size: 11px;
     font-weight: 500;
-    letter-spacing: .06em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--fg-2);
 }
 
-/* ─────────────────────────────────────
-   Theme switcher
-───────────────────────────────────── */
+/* =============================================================================
+   THEME SWITCHER
+============================================================================= */
 .theme-switcher {
     display: flex;
     align-items: center;
@@ -236,41 +261,38 @@ body {
 }
 
 .theme-btn {
-    width: 20px !important;
-    height: 20px !important;
-    min-width: 20px !important;
-    padding: 0 !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    background: transparent !important;
-    border: 1px solid transparent !important;
-    border-radius: 3px !important;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
     cursor: pointer;
-    transition: background var(--t) !important;
+    transition: background var(--t);
 }
 
 .theme-btn:hover {
-    background: var(--hover) !important;
-    transform: none !important;
-    box-shadow: none !important;
+    background: var(--hover);
 }
 
 .theme-btn.active {
-    background: var(--hover) !important;
-    border-color: var(--line-mid) !important;
-    box-shadow: none !important;
+    background: var(--hover);
+    border-color: var(--line-mid);
 }
 
 .swatch {
     width: 10px;
     height: 10px;
     border-radius: 2px;
-    border: 1px solid rgba(128, 128, 128, .2);
+    border: 1px solid rgba(128, 128, 128, 0.2);
 }
 
 .swatch.theme-black {
-    background: #000;
+    background: #000000;
 }
 
 .swatch.theme-grey {
@@ -278,16 +300,16 @@ body {
 }
 
 .swatch.theme-light {
-    background: #f2f2f2;
+    background: #e8e8e8;
 }
 
 .swatch.theme-white {
-    background: #fff;
+    background: #ffffff;
 }
 
-/* ─────────────────────────────────────
-   Zoom controls
-───────────────────────────────────── */
+/* =============================================================================
+   ZOOM CONTROLS
+============================================================================= */
 .zoom-controls {
     display: flex;
     align-items: center;
@@ -324,9 +346,9 @@ body {
     background: var(--hover);
 }
 
-/* ─────────────────────────────────────
-   Buttons (global)
-───────────────────────────────────── */
+/* =============================================================================
+   BUTTONS
+============================================================================= */
 button {
     display: inline-flex;
     align-items: center;
@@ -340,20 +362,18 @@ button {
     font-family: 'DM Sans', sans-serif;
     font-size: 12px;
     font-weight: 400;
-    transition: background var(--t), color var(--t), border-color var(--t);
     white-space: nowrap;
+    transition: background var(--t), color var(--t), border-color var(--t);
 }
 
 button:hover {
     background: var(--hover);
     color: var(--fg);
     border-color: var(--line-mid);
-    transform: none;
-    box-shadow: none;
 }
 
 button:active {
-    opacity: .6;
+    opacity: 0.6;
 }
 
 .btn-group {
@@ -363,53 +383,42 @@ button:active {
 }
 
 .btn-primary {
-    background: var(--accent) !important;
-    border-color: transparent !important;
-    color: var(--accent-fg) !important;
-    font-weight: 500 !important;
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--accent-fg);
+    font-weight: 500;
 }
 
 .btn-primary:hover {
-    opacity: .88 !important;
-    transform: none !important;
-    box-shadow: none !important;
+    opacity: 0.88;
 }
 
 .btn-secondary {
-    background: transparent !important;
-    border-color: var(--line-mid) !important;
-    color: var(--fg-2) !important;
+    background: transparent;
+    border-color: var(--line-mid);
+    color: var(--fg-2);
 }
 
 .btn-secondary:hover {
-    background: var(--hover) !important;
-    color: var(--fg) !important;
+    background: var(--hover);
+    color: var(--fg);
 }
 
 .btn-active {
-    background: var(--active) !important;
-    border-color: transparent !important;
-    color: var(--accent) !important;
+    background: var(--active);
+    border-color: transparent;
+    color: var(--accent);
 }
 
 .btn-disabled {
-    opacity: .25;
+    opacity: 0.25;
     cursor: not-allowed;
     pointer-events: none;
 }
 
-/* ─────────────────────────────────────
-   Layout
-───────────────────────────────────── */
-.editor-main {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-}
-
-/* ─────────────────────────────────────
-   Layer panel
-───────────────────────────────────── */
+/* =============================================================================
+   LAYER PANEL
+============================================================================= */
 .layer-panel {
     width: 240px;
     min-width: 240px;
@@ -432,11 +441,12 @@ button:active {
 .panel-header h2 {
     font-size: 9px;
     font-weight: 500;
-    letter-spacing: .12em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--fg-3);
 }
 
+/* Mode toggles (Radio / Fixed / Flip) */
 .layer-mode-bar {
     display: flex;
     gap: 3px;
@@ -454,20 +464,18 @@ button:active {
     padding: 3px 5px;
     font-size: 10px;
     font-weight: 500;
-    letter-spacing: .05em;
+    letter-spacing: 0.05em;
     border-radius: 3px;
     border: 1px solid transparent;
     background: transparent;
     color: var(--fg-3);
     cursor: pointer;
     transition: background var(--t), color var(--t);
-    transform: none !important;
 }
 
 .mode-toggle:hover {
     background: var(--hover);
     color: var(--fg-2);
-    transform: none !important;
 }
 
 .mode-toggle.active {
@@ -475,6 +483,59 @@ button:active {
     color: var(--accent);
 }
 
+/* Search bar */
+.layer-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+    background: var(--bg-panel);
+}
+
+.layer-search-icon {
+    color: var(--fg-3);
+    flex-shrink: 0;
+}
+
+.layer-search-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--fg);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 300;
+    min-width: 0;
+}
+
+.layer-search-input::placeholder {
+    color: var(--fg-3);
+}
+
+.layer-search-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: var(--fg-3);
+    flex-shrink: 0;
+}
+
+.layer-search-clear:hover {
+    background: var(--hover);
+    color: var(--fg);
+}
+
+/* Scroll container */
 .layer-scroll {
     flex: 1;
     overflow-y: auto;
@@ -495,6 +556,7 @@ button:active {
     border-radius: 99px;
 }
 
+/* Layer tree */
 .layer-list,
 .sub-layers {
     list-style: none;
@@ -515,18 +577,19 @@ button:active {
     align-items: center;
     gap: 3px;
     padding: 3px 8px 3px 4px;
-    border-radius: 3px;
     margin: 0 3px;
     min-height: 28px;
+    border-radius: 3px;
+    border: 1px solid transparent;
     cursor: default;
     transition: background var(--t);
-    border: 1px solid transparent;
 }
 
 .layer-item:hover {
     background: var(--hover);
 }
 
+/* Expand / collapse toggle */
 .toggle-expand {
     display: flex;
     align-items: center;
@@ -534,25 +597,22 @@ button:active {
     width: 18px;
     height: 18px;
     min-width: 18px;
-    border-radius: 3px;
+    padding: 0;
     background: transparent;
     border: none;
+    border-radius: 3px;
     color: var(--fg-3);
-    padding: 0;
     flex-shrink: 0;
     cursor: pointer;
     transition: background var(--t), color var(--t);
-    transform: none !important;
-    box-shadow: none !important;
 }
 
 .toggle-expand:hover {
     background: var(--hover);
     color: var(--fg-2);
-    transform: none !important;
-    box-shadow: none !important;
 }
 
+/* Visibility toggle */
 .visibility-toggle,
 .visibility-locked {
     display: flex;
@@ -574,6 +634,7 @@ button:active {
     background: var(--hover);
 }
 
+/* Radio indicator dot */
 .radio-indicator {
     width: 8px;
     height: 8px;
@@ -589,6 +650,7 @@ button:active {
     background: var(--accent);
 }
 
+/* Thumbnail cell */
 .layer-preview-thumbnail {
     width: 22px;
     height: 22px;
@@ -600,6 +662,7 @@ button:active {
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    /* チェッカーボード（ライトテーマ用） */
     background-color: #fff;
     background-image:
         linear-gradient(45deg, #e8e8e8 25%, transparent 25%),
@@ -610,6 +673,7 @@ button:active {
     background-position: 0 0, 0 3.5px, 3.5px -3.5px, -3.5px 0;
 }
 
+/* ダークテーマ用チェッカーボード */
 .theme-black .layer-preview-thumbnail,
 .theme-grey .layer-preview-thumbnail {
     background-color: #1a1a1a;
@@ -626,18 +690,19 @@ button:active {
     object-fit: contain;
 }
 
+/* Layer name input */
 .layer-name-input {
+    flex: 1;
+    min-width: 0;
     background: transparent;
     border: none;
+    outline: none;
     color: var(--fg);
     font-family: 'DM Sans', sans-serif;
     font-size: 12px;
     font-weight: 300;
     padding: 1px 3px;
     border-radius: 3px;
-    flex: 1;
-    min-width: 0;
-    outline: none;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -652,10 +717,81 @@ button:active {
     font-style: italic;
 }
 
+/* State modifiers */
 .layer-locked {
-    opacity: .5;
+    opacity: 0.5;
 }
 
+.layer-dragging {
+    opacity: 0.4;
+}
+
+.layer-drop-inside {
+    outline: 1px solid var(--accent);
+    background: var(--accent-sub);
+}
+
+/* Drag handle */
+.drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    min-width: 14px;
+    height: 18px;
+    color: var(--fg-3);
+    cursor: grab;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity var(--t);
+}
+
+.layer-item:hover .drag-handle {
+    opacity: 1;
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+/* Delete button */
+.layer-delete-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--fg-3);
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity var(--t), background var(--t), color var(--t);
+}
+
+.layer-item:hover .layer-delete-btn {
+    opacity: 1;
+}
+
+.layer-delete-btn:hover {
+    background: rgba(220, 60, 60, 0.15);
+    border-color: rgba(220, 60, 60, 0.3);
+    color: #e05555;
+}
+
+/* Drop indicator line */
+.drop-indicator {
+    height: 2px;
+    background: var(--accent);
+    border-radius: 99px;
+    margin: 0 8px;
+    pointer-events: none;
+}
+
+/* Spacer (no expand button) */
 .spacer {
     display: inline-block;
     width: 18px;
@@ -663,14 +799,7 @@ button:active {
     flex-shrink: 0;
 }
 
-.text-accent {
-    color: var(--accent);
-}
-
-.text-muted {
-    color: var(--fg-3);
-}
-
+/* Empty state */
 .empty-state {
     display: flex;
     align-items: center;
@@ -681,49 +810,84 @@ button:active {
     font-weight: 300;
 }
 
-/* ─────────────────────────────────────
-   Preview panel
-───────────────────────────────────── */
+/* =============================================================================
+   SEARCH RESULTS
+============================================================================= */
+.search-results-list {
+    padding: 3px 0;
+}
+
+.search-result-row {
+    cursor: default;
+    gap: 4px;
+}
+
+.search-depth-hint {
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: -0.05em;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.search-result-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.search-highlight {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+/* =============================================================================
+   PREVIEW PANEL
+============================================================================= */
 .preview-panel {
     flex: 1;
     background: var(--bg);
-    overflow: hidden;
+    overflow: scroll;
+    /* ネイティブスクロールに委譲 */
     position: relative;
     cursor: grab;
+    scrollbar-width: none;
+    /* Firefox */
+    -ms-overflow-style: none;
+    /* IE / Edge */
+}
+
+.preview-panel::-webkit-scrollbar {
+    display: none;
+    /* Chrome / Safari / Tauri WebView */
 }
 
 .preview-panel:active {
     cursor: grabbing;
 }
 
-/* dot grid */
-.preview-panel::after {
-    content: '';
-    position: absolute;
-    inset: 0;
+/* ドットグリッド背景はスクロール追従のため ::after ではなく inner に描画 */
+.preview-scroll-inner {
     background-image: radial-gradient(circle, var(--line) 1px, transparent 1px);
     background-size: 20px 20px;
-    pointer-events: none;
-    z-index: 0;
 }
 
-.preview-panel::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-
-.preview-panel::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.preview-panel::-webkit-scrollbar-thumb {
-    background: var(--line-mid);
-    border-radius: 99px;
-}
-
+/* Canvas wrapper */
 .canvas-container {
     outline: 1px solid var(--line-mid);
     border-radius: 2px;
+    position: relative;
+    flex-shrink: 0;
+    overflow: hidden;
+    z-index: 1;
+    /* チェッカーボード（ライトテーマ用） */
     background-color: #fff;
     background-image:
         linear-gradient(45deg, #eee 25%, transparent 25%),
@@ -732,11 +896,6 @@ button:active {
         linear-gradient(-45deg, transparent 75%, #eee 75%);
     background-size: 16px 16px;
     background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-    position: relative;
-    flex-shrink: 0;
-    overflow: hidden;
-    transition: none;
-    z-index: 1;
 }
 
 .theme-black .canvas-container,
@@ -753,6 +912,7 @@ canvas {
     display: block;
 }
 
+/* Placeholder (no file loaded) */
 .placeholder {
     position: absolute;
     inset: 0;
@@ -769,7 +929,7 @@ canvas {
     width: 40px;
     height: 40px;
     color: var(--fg-3);
-    opacity: .4;
+    opacity: 0.4;
 }
 
 .placeholder p {
@@ -778,13 +938,13 @@ canvas {
     font-weight: 300;
 }
 
-/* ─────────────────────────────────────
-   Drag overlay
-───────────────────────────────────── */
+/* =============================================================================
+   DRAG & DROP OVERLAY
+============================================================================= */
 .drag-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, .72);
+    background: rgba(0, 0, 0, 0.72);
     z-index: 9999;
     display: flex;
     align-items: center;
@@ -828,25 +988,13 @@ canvas {
 
 .overlay-text p {
     font-size: 11px;
-    color: var(--fg-3);
     font-weight: 300;
+    color: var(--fg-3);
 }
 
-@keyframes dragPulse {
-
-    0%,
-    100% {
-        opacity: .85;
-    }
-
-    50% {
-        opacity: 1;
-    }
-}
-
-/* ─────────────────────────────────────
-   Toast
-───────────────────────────────────── */
+/* =============================================================================
+   TOAST NOTIFICATION
+============================================================================= */
 .toast-notification {
     position: absolute;
     bottom: 16px;
@@ -860,8 +1008,8 @@ canvas {
     padding: 8px 14px;
     border-radius: var(--r);
     z-index: 2000;
-    animation: toastIn .2s ease;
     white-space: nowrap;
+    animation: toastIn 0.2s ease;
 }
 
 .toast-notification.success {
@@ -878,20 +1026,46 @@ canvas {
 }
 
 .toast-close {
-    background: transparent !important;
-    border: none !important;
-    padding: 2px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
     color: var(--fg-3);
     cursor: pointer;
-    border-radius: 3px !important;
-    box-shadow: none !important;
-    transform: none !important;
 }
 
 .toast-close:hover {
-    color: var(--fg) !important;
-    background: var(--hover) !important;
-    transform: none !important;
+    color: var(--fg);
+    background: var(--hover);
+}
+
+/* =============================================================================
+   UTILITY CLASSES
+============================================================================= */
+.text-accent {
+    color: var(--accent);
+}
+
+.text-muted {
+    color: var(--fg-3);
+}
+
+/* =============================================================================
+   ANIMATIONS
+============================================================================= */
+@keyframes dragPulse {
+
+    0%,
+    100% {
+        opacity: 0.85;
+    }
+
+    50% {
+        opacity: 1;
+    }
 }
 
 @keyframes toastIn {
@@ -906,9 +1080,6 @@ canvas {
     }
 }
 
-/* ─────────────────────────────────────
-   Spinner
-───────────────────────────────────── */
 @keyframes spin {
     from {
         transform: rotate(0deg);
@@ -917,231 +1088,4 @@ canvas {
     to {
         transform: rotate(360deg);
     }
-}
-
-/* ─────────────────────────────────────
-   ドラッグハンドル
-───────────────────────────────────── */
-.drag-handle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    min-width: 14px;
-    height: 18px;
-    color: var(--fg-3);
-    cursor: grab;
-    flex-shrink: 0;
-    opacity: 0;
-    transition: opacity var(--t);
-}
-
-.layer-item:hover .drag-handle {
-    opacity: 1;
-}
-
-.drag-handle:active {
-    cursor: grabbing;
-}
-
-/* ─────────────────────────────────────
-   削除ボタン（ホバー時のみ表示）
-───────────────────────────────────── */
-.layer-delete-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px !important;
-    min-width: 18px !important;
-    height: 18px !important;
-    padding: 0 !important;
-    background: transparent !important;
-    border: 1px solid transparent !important;
-    border-radius: 3px !important;
-    color: var(--fg-3) !important;
-    flex-shrink: 0;
-    opacity: 0;
-    transition: opacity var(--t), background var(--t), color var(--t) !important;
-    box-shadow: none !important;
-    transform: none !important;
-}
-
-.layer-item:hover .layer-delete-btn {
-    opacity: 1;
-}
-
-.layer-delete-btn:hover {
-    background: rgba(220, 60, 60, 0.15) !important;
-    border-color: rgba(220, 60, 60, 0.3) !important;
-    color: #e05555 !important;
-    transform: none !important;
-    box-shadow: none !important;
-}
-
-/* ─────────────────────────────────────
-   ドラッグ中のレイヤー行
-───────────────────────────────────── */
-.layer-dragging {
-    opacity: 0.4;
-}
-
-/* ─────────────────────────────────────
-   ドロップインジケーター（before / after）
-───────────────────────────────────── */
-.drop-indicator {
-    height: 2px;
-    background: var(--accent);
-    border-radius: 99px;
-    margin: 0 8px;
-    pointer-events: none;
-}
-
-/* ─────────────────────────────────────
-   グループ内ドロップ（inside）
-───────────────────────────────────── */
-.layer-drop-inside {
-    outline: 1px solid var(--accent) !important;
-    background: var(--accent-sub) !important;
-}
-
-/* ─────────────────────────────────────
-   検索バー
-───────────────────────────────────── */
-.layer-search-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--line);
-    flex-shrink: 0;
-    background: var(--bg-panel);
-}
-
-.layer-search-icon {
-    color: var(--fg-3);
-    flex-shrink: 0;
-}
-
-.layer-search-input {
-    flex: 1;
-    background: transparent;
-    border: none;
-    outline: none;
-    color: var(--fg);
-    font-family: 'DM Sans', sans-serif;
-    font-size: 12px;
-    font-weight: 300;
-    min-width: 0;
-}
-
-.layer-search-input::placeholder {
-    color: var(--fg-3);
-}
-
-.layer-search-clear {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px !important;
-    height: 16px !important;
-    min-width: 16px !important;
-    padding: 0 !important;
-    background: transparent !important;
-    border: none !important;
-    border-radius: 3px !important;
-    color: var(--fg-3) !important;
-    flex-shrink: 0;
-    box-shadow: none !important;
-    transform: none !important;
-}
-
-.layer-search-clear:hover {
-    background: var(--hover) !important;
-    color: var(--fg) !important;
-    transform: none !important;
-}
-
-/* ─────────────────────────────────────
-   検索結果リスト
-───────────────────────────────────── */
-.search-results-list {
-    padding: 3px 0;
-}
-
-.search-result-row {
-    cursor: default;
-    gap: 4px;
-}
-
-.search-depth-hint {
-    font-size: 10px;
-    color: var(--fg-3);
-    letter-spacing: -0.05em;
-    flex-shrink: 0;
-    user-select: none;
-}
-
-.search-result-name {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    font-weight: 300;
-    color: var(--fg);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.search-highlight {
-    background: var(--accent);
-    color: var(--accent-fg);
-    border-radius: 2px;
-    padding: 0 1px;
-}
-
-/* ─────────────────────────────────────
-   プレビューパネル スクロールバー対応
-───────────────────────────────────── */
-
-.preview-panel {
-    flex: 1;
-    background: var(--bg);
-    /* overflow:scroll にするとブラウザのネイティブスクロールが有効になり
-       トラックパッドの2本指パンがOS軸ロックなしで動作する */
-    overflow: scroll;
-    position: relative;
-    cursor: grab;
-
-    /* スクロールバーを非表示（スクロール機能は維持） */
-    scrollbar-width: none;
-    /* Firefox */
-    -ms-overflow-style: none;
-    /* IE / Edge Legacy */
-}
-
-.preview-panel::-webkit-scrollbar {
-    display: none;
-    /* Chrome / Safari / Tauri WebView */
-}
-
-.preview-panel:active {
-    cursor: grabbing;
-}
-
-/* dot grid を ::after で描画するのをやめ、
-   内側の .preview-scroll-inner に background で描画する
-   （::after は position:absolute になるためスクロールに追従しない） */
-.preview-panel::after {
-    display: none;
-}
-
-.preview-scroll-inner {
-    background-image: radial-gradient(circle, var(--line) 1px, transparent 1px);
-    background-size: 20px 20px;
-}
-
-/* カスタムスクロールバーは不要 */
-.preview-sb-track,
-.preview-sb-thumb {
-    display: none;
 }
