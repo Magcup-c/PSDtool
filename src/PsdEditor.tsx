@@ -5,65 +5,65 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readPsd, writePsd, Psd } from 'ag-psd';
 import {
-    FolderOpen,
-    Save,
-    Layers,
-    ChevronDown,
-    ChevronRight,
-    Eye,
-    EyeOff,
-    Image as ImageIcon,
-    Folder as FolderIcon,
-    Monitor,
-    ZoomIn,
-    ZoomOut,
-    Maximize,
-    X,
-    Minus,
-    Square,
-    CheckCircle2,
-    AlertCircle,
-    Download,
-    FlipHorizontal2,
-    FlipVertical2,
-    Asterisk,
-    Pin,
-    Replace,
-    ChevronsDownUp,
-    ChevronsUpDown,
-    Plus,
-    FolderPlus,
-    Trash2,
-    GripVertical,
-    Search,
+    FolderOpen, Save, Layers, ChevronDown, ChevronRight,
+    Eye, EyeOff, Image as ImageIcon, Folder as FolderIcon,
+    Monitor, ZoomIn, ZoomOut, Maximize, X, Minus, Square,
+    CheckCircle2, AlertCircle, Download, FlipHorizontal2,
+    FlipVertical2, Asterisk, Pin, Replace, ChevronsDownUp,
+    ChevronsUpDown, Plus, FolderPlus, Trash2, GripVertical, Search,
 } from 'lucide-react';
 import './PsdEditor.css';
 
 // ─────────────────────────────────────────────────
-// ユーティリティ: 親パスから子レイヤー配列を取得
+// ユーティリティ
 // ─────────────────────────────────────────────────
 function getLayersAtPath(children: any[], parentPath: number[]): any[] {
     let current = children;
-    for (const idx of parentPath) {
-        current = current[idx].children;
-    }
+    for (const idx of parentPath) current = current[idx].children;
     return current;
+}
+
+// ─────────────────────────────────────────────────
+// 【最適化1】toDataUrl キャッシュ
+// ロード直後に一度だけ変換して layer._dataUrl に保存。
+// 以降の再レンダリングでは文字列を参照するだけ。
+// ─────────────────────────────────────────────────
+function cacheDataUrls(layers: any[]): void {
+    for (const layer of layers) {
+        if (layer.canvas && layer._dataUrl === undefined) {
+            try { layer._dataUrl = layer.canvas.toDataURL(); }
+            catch { layer._dataUrl = null; }
+        }
+        if (layer.children?.length) cacheDataUrls(layer.children);
+    }
+}
+
+// ─────────────────────────────────────────────────
+// 【最適化2】immutable ツリー更新（変更パスのみコピー）
+// 変更されないノードは参照を保持 → memo の === 比較が通る
+// ─────────────────────────────────────────────────
+function updateLayerByPath(psd: Psd, path: number[], update: (layer: any) => any): Psd {
+    const newPsd = { ...psd };
+    if (!newPsd.children) return newPsd;
+    newPsd.children = [...newPsd.children];
+    let current = newPsd.children;
+    const pathCopy = [...path];
+    const lastIdx = pathCopy.pop();
+    if (lastIdx === undefined) return newPsd;
+    for (const idx of pathCopy) {
+        current[idx] = { ...current[idx], children: [...(current[idx].children || [])] };
+        current = current[idx].children!;
+    }
+    current[lastIdx] = update(current[lastIdx]);
+    return newPsd;
 }
 
 // ─────────────────────────────────────────────────
 // Toast
 // ─────────────────────────────────────────────────
-interface ToastProps {
-    message: string;
-    type: 'success' | 'error';
-    onClose: () => void;
-}
-
+interface ToastProps { message: string; type: 'success' | 'error'; onClose: () => void; }
 const Toast = ({ message, type, onClose }: ToastProps) => {
-    useEffect(() => {
-        const timer = setTimeout(onClose, 3000);
-        return () => clearTimeout(timer);
-    }, [onClose]);
+    useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
     return (
         <div className={`toast-notification ${type}`}>
             {type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
@@ -76,74 +76,38 @@ const Toast = ({ message, type, onClose }: ToastProps) => {
 // ─────────────────────────────────────────────────
 // DropTarget 型
 // ─────────────────────────────────────────────────
-interface DropTargetInfo {
-    path: number[];
-    position: 'before' | 'after' | 'inside';
-}
+interface DropTargetInfo { path: number[]; position: 'before' | 'after' | 'inside'; }
 
 // ─────────────────────────────────────────────────
-// 検索: ツリーを再帰的に走査してマッチ結果を収集
+// 検索
 // ─────────────────────────────────────────────────
 interface SearchResult {
-    layer: any;
-    path: number[];
-    // 表示名（プレフィックス除去済み）
-    displayName: string;
-    // マッチ箇所の開始・終了インデックス
-    matchStart: number;
-    matchEnd: number;
+    layer: any; path: number[]; displayName: string;
+    matchStart: number; matchEnd: number;
 }
-
-function collectSearchResults(
-    layers: any[],
-    query: string,
-    parentPath: number[] = [],
-): SearchResult[] {
+function collectSearchResults(layers: any[], query: string, parentPath: number[] = []): SearchResult[] {
     const results: SearchResult[] = [];
     const lowerQuery = query.toLowerCase();
-
     layers.forEach((layer, idx) => {
         const rawName = layer.name || '';
-        // *・! プレフィックスを除いた表示名で検索
-        const displayName = rawName.startsWith('*') || rawName.startsWith('!')
-            ? rawName.slice(1)
-            : rawName;
-        const lowerDisplay = displayName.toLowerCase();
-        const matchStart = lowerDisplay.indexOf(lowerQuery);
-
-        if (matchStart !== -1) {
-            results.push({
-                layer,
-                path: [...parentPath, idx],
-                displayName,
-                matchStart,
-                matchEnd: matchStart + lowerQuery.length,
-            });
-        }
-
-        // グループは再帰的に検索
-        if (layer.children?.length) {
+        const displayName = rawName.startsWith('*') || rawName.startsWith('!') ? rawName.slice(1) : rawName;
+        const matchStart = displayName.toLowerCase().indexOf(lowerQuery);
+        if (matchStart !== -1)
+            results.push({ layer, path: [...parentPath, idx], displayName, matchStart, matchEnd: matchStart + lowerQuery.length });
+        if (layer.children?.length)
             results.push(...collectSearchResults(layer.children, query, [...parentPath, idx]));
-        }
     });
-
     return results;
 }
 
 // ─────────────────────────────────────────────────
-// 検索結果の1行
+// 【最適化3】SearchResultRow: _dataUrl を直接使用
 // ─────────────────────────────────────────────────
-interface SearchResultRowProps {
-    result: SearchResult;
-    onToggle: (path: number[]) => void;
-}
-
+interface SearchResultRowProps { result: SearchResult; onToggle: (path: number[]) => void; }
 const SearchResultRow = memo(({ result, onToggle }: SearchResultRowProps) => {
     const { layer, path, displayName, matchStart, matchEnd } = result;
     const hasChildren = !!(layer.children?.length);
     const depth = path.length - 1;
-
-    // マッチ箇所を <mark> でハイライト
     const highlighted = (
         <span>
             {displayName.slice(0, matchStart)}
@@ -151,58 +115,46 @@ const SearchResultRow = memo(({ result, onToggle }: SearchResultRowProps) => {
             {displayName.slice(matchEnd)}
         </span>
     );
-
     return (
-        <div
-            className="layer-item search-result-row"
-            style={{ paddingLeft: 8 + depth * 12 }}
-        >
-            {/* 深さのヒント */}
-            {depth > 0 && (
-                <span className="search-depth-hint" title={`depth ${depth}`}>
-                    {'›'.repeat(depth)}
-                </span>
-            )}
-
-            {/* 表示/非表示トグル */}
-            <div
-                className="visibility-toggle"
-                onClick={() => onToggle(path)}
-                title="Toggle visibility"
-            >
-                {!layer.hidden
-                    ? <Eye size={16} className="text-accent" />
-                    : <EyeOff size={16} className="text-muted" />
-                }
+        <div className="layer-item search-result-row" style={{ paddingLeft: 8 + depth * 12 }}>
+            {depth > 0 && <span className="search-depth-hint" title={`depth ${depth}`}>{'›'.repeat(depth)}</span>}
+            <div className="visibility-toggle" onClick={() => onToggle(path)} title="Toggle visibility">
+                {!layer.hidden ? <Eye size={16} className="text-accent" /> : <EyeOff size={16} className="text-muted" />}
             </div>
-
-            {/* サムネイル */}
             <div className="layer-preview-thumbnail">
                 {hasChildren
                     ? <FolderIcon size={16} className="text-muted" fill="currentColor" fillOpacity={0.1} />
-                    : layer.canvas
-                        ? <img src={(() => { try { return layer.canvas.toDataURL(); } catch { return ''; } })()} alt="" className="layer-thumbnail-img" />
+                    : layer._dataUrl
+                        ? <img src={layer._dataUrl} alt="" className="layer-thumbnail-img" />
                         : <ImageIcon size={16} className="text-muted" />
                 }
             </div>
-
-            {/* ハイライト付きレイヤー名 */}
             <span className="search-result-name">{highlighted}</span>
         </div>
     );
 });
 
 // ─────────────────────────────────────────────────
+// LayerThumbnail: _dataUrl 文字列を参照するだけ（toDataURL 不要）
+// ─────────────────────────────────────────────────
+const LayerThumbnail = memo(({ dataUrl, hasChildren }: { dataUrl?: string | null; hasChildren: boolean }) => (
+    <div className="layer-preview-thumbnail">
+        {dataUrl
+            ? <img src={dataUrl} alt="" className="layer-thumbnail-img" />
+            : hasChildren
+                ? <FolderIcon size={16} className="text-muted" fill="currentColor" fillOpacity={0.1} />
+                : <ImageIcon size={16} className="text-muted" />
+        }
+    </div>
+));
+
+// ─────────────────────────────────────────────────
 // LayerItem
 // ─────────────────────────────────────────────────
 interface LayerItemProps {
-    layer: any;
-    path: number[];
-    siblings: any[];
-    radioEnabled: boolean;
-    lockedEnabled: boolean;
-    isClosed: boolean;
-    isChildClosed: (childKey: string) => boolean;
+    layer: any; path: number[]; siblings: any[];
+    radioEnabled: boolean; lockedEnabled: boolean; flipEnabled: boolean;
+    isClosed: boolean; isChildClosed: (k: string) => boolean;
     onToggleExpand: (key: string) => void;
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
@@ -211,29 +163,13 @@ interface LayerItemProps {
     onDragStart: (e: React.MouseEvent, path: number[]) => void;
     draggingPath: number[] | null;
     dropTarget: DropTargetInfo | null;
+    hasFlipSuffix: (name: string) => boolean;
 }
 
-const LayerThumbnail = memo(({ canvas, hasChildren }: { canvas?: HTMLCanvasElement; hasChildren: boolean }) => {
-    const dataUrl = useMemo(() => {
-        if (!canvas) return null;
-        try { return canvas.toDataURL(); } catch { return null; }
-    }, [canvas]);
-    return (
-        <div className="layer-preview-thumbnail">
-            {dataUrl
-                ? <img src={dataUrl} alt="" className="layer-thumbnail-img" />
-                : hasChildren
-                    ? <FolderIcon size={16} className="text-muted" fill="currentColor" fillOpacity={0.1} />
-                    : <ImageIcon size={16} className="text-muted" />
-            }
-        </div>
-    );
-});
-
 const LayerItem = memo(({
-    layer, path, siblings, radioEnabled, lockedEnabled,
+    layer, path, siblings, radioEnabled, lockedEnabled, flipEnabled,
     isClosed, isChildClosed, onToggleExpand, onToggle, onRename, onRadioSelect,
-    onDelete, onDragStart, draggingPath, dropTarget,
+    onDelete, onDragStart, draggingPath, dropTarget, hasFlipSuffix,
 }: LayerItemProps) => {
     const key = path.join('-');
     const hasChildren = !!(layer.children?.length);
@@ -260,13 +196,10 @@ const LayerItem = memo(({
     }, [isRadio, isLocked, onRename, path]);
 
     const handleDelete = useCallback((e: React.MouseEvent) => {
-        e.stopPropagation();
-        onDelete(path);
+        e.stopPropagation(); onDelete(path);
     }, [onDelete, path]);
 
     const handleDragStart = useCallback((e: React.MouseEvent) => {
-        // preventDefault でブラウザのフォーカス移動が抑制されるため、
-        // 手動で現在フォーカス中の input を blur させる
         (document.activeElement as HTMLElement)?.blur();
         onDragStart(e, path);
     }, [onDragStart, path]);
@@ -275,32 +208,17 @@ const LayerItem = memo(({
         <li className="layer-node">
             {isDropBefore && <div className="drop-indicator" />}
             <div
-                className={[
-                    'layer-item',
-                    isLocked ? 'layer-locked' : '',
-                    isRadio ? 'layer-radio' : '',
-                    isDraggingThis ? 'layer-dragging' : '',
-                    isDropInside ? 'layer-drop-inside' : '',
-                ].filter(Boolean).join(' ')}
+                className={['layer-item', isLocked ? 'layer-locked' : '', isRadio ? 'layer-radio' : '',
+                    isDraggingThis ? 'layer-dragging' : '', isDropInside ? 'layer-drop-inside' : ''].filter(Boolean).join(' ')}
                 data-path={key}
                 data-group={hasChildren ? 'true' : 'false'}
-                onMouseDown={(e) => {
-                    // input 以外の場所をクリックしたときフォーカスを外す
-                    if ((e.target as HTMLElement).tagName !== 'INPUT') {
-                        (document.activeElement as HTMLElement)?.blur();
-                    }
-                }}
+                onMouseDown={(e) => { if ((e.target as HTMLElement).tagName !== 'INPUT') (document.activeElement as HTMLElement)?.blur(); }}
             >
-                {/* ドラッグハンドル */}
-                <span className="drag-handle" onMouseDown={handleDragStart} title="Drag to reorder">
-                    <GripVertical size={12} />
-                </span>
-
+                <span className="drag-handle" onMouseDown={handleDragStart} title="Drag to reorder"><GripVertical size={12} /></span>
                 {hasChildren
                     ? <button className="toggle-expand" onClick={handleExpandClick}>{!isClosed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
                     : <span className="spacer" />
                 }
-
                 {!isLocked ? (
                     <div className="visibility-toggle" onClick={handleVisibilityClick} title={isRadio ? 'Select (radio)' : 'Toggle visibility'}>
                         {isRadio
@@ -313,56 +231,36 @@ const LayerItem = memo(({
                         <Eye size={16} className="text-accent" style={{ opacity: 0.4 }} />
                     </span>
                 )}
-
-                <LayerThumbnail canvas={layer.canvas} hasChildren={hasChildren} />
-
+                {/* _dataUrl を直接渡す（toDataURL は呼ばない） */}
+                <LayerThumbnail dataUrl={layer._dataUrl} hasChildren={hasChildren} />
                 <input
-                    type="text"
-                    className="layer-name-input"
-                    value={displayName}
-                    onChange={handleRename}
+                    type="text" className="layer-name-input"
+                    value={displayName} onChange={handleRename}
                     placeholder={hasChildren ? 'New Group' : 'New Layer'}
                 />
-
-                {/* 削除ボタン（ホバーで表示、CSS で制御） */}
                 <button
-                    className="layer-delete-btn"
-                    onClick={handleDelete}
-                    title="Delete layer"
-                    onMouseDown={(e) => {
-                        e.stopPropagation();
-                        (document.activeElement as HTMLElement)?.blur();
-                    }}
+                    className="layer-delete-btn" onClick={handleDelete} title="Delete layer"
+                    onMouseDown={(e) => { e.stopPropagation(); (document.activeElement as HTMLElement)?.blur(); }}
                 >
                     <Trash2 size={12} />
                 </button>
             </div>
             {isDropAfter && <div className="drop-indicator" />}
-
             {hasChildren && !isClosed && (
                 <ul className="sub-layers">
                     {[...(layer.children || [])].reverse().map((child: any, i: number) => {
                         const originalIndex = (layer.children.length - 1) - i;
                         const childPath = [...path, originalIndex];
                         const childKey = childPath.join('-');
+                        if (flipEnabled && hasFlipSuffix(child.name || '')) return null;
                         return (
                             <LayerItem
-                                key={childKey}
-                                layer={child}
-                                path={childPath}
-                                siblings={layer.children}
-                                radioEnabled={radioEnabled}
-                                lockedEnabled={lockedEnabled}
-                                isClosed={isChildClosed(childKey)}
-                                isChildClosed={isChildClosed}
-                                onToggleExpand={onToggleExpand}
-                                onToggle={onToggle}
-                                onRename={onRename}
-                                onRadioSelect={onRadioSelect}
-                                onDelete={onDelete}
-                                onDragStart={onDragStart}
-                                draggingPath={draggingPath}
-                                dropTarget={dropTarget}
+                                key={childKey} layer={child} path={childPath} siblings={layer.children}
+                                radioEnabled={radioEnabled} lockedEnabled={lockedEnabled} flipEnabled={flipEnabled}
+                                isClosed={isChildClosed(childKey)} isChildClosed={isChildClosed}
+                                onToggleExpand={onToggleExpand} onToggle={onToggle} onRename={onRename}
+                                onRadioSelect={onRadioSelect} onDelete={onDelete} onDragStart={onDragStart}
+                                draggingPath={draggingPath} dropTarget={dropTarget} hasFlipSuffix={hasFlipSuffix}
                             />
                         );
                     })}
@@ -370,7 +268,27 @@ const LayerItem = memo(({
             )}
         </li>
     );
-});
+}, (prev, next) =>
+    // 【最適化2の効果】変更されていないノードは layer の参照が同じ → スキップ
+    prev.layer === next.layer &&
+    prev.isClosed === next.isClosed &&
+    prev.radioEnabled === next.radioEnabled &&
+    prev.lockedEnabled === next.lockedEnabled &&
+    prev.flipEnabled === next.flipEnabled &&
+    prev.draggingPath === next.draggingPath &&
+    prev.dropTarget === next.dropTarget
+);
+
+// ─────────────────────────────────────────────────
+// throttle ユーティリティ
+// ─────────────────────────────────────────────────
+function throttle<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+    let last = 0;
+    return ((...args: any[]) => {
+        const now = Date.now();
+        if (now - last >= ms) { last = now; fn(...args); }
+    }) as T;
+}
 
 // ─────────────────────────────────────────────────
 // PsdEditor
@@ -387,37 +305,30 @@ const PsdEditor = () => {
     const [theme, setTheme] = useState<'black' | 'grey' | 'light' | 'white'>('grey');
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
     const [closedKeys, setClosedKeys] = useState<Set<string>>(new Set());
-
-    // ドラッグ関連 state
     const [draggingPath, setDraggingPath] = useState<number[] | null>(null);
     const [dropTarget, setDropTarget] = useState<DropTargetInfo | null>(null);
-
-    // 検索
     const [searchQuery, setSearchQuery] = useState('');
     const searchInputRef = useRef<HTMLInputElement>(null);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const previewRef = useRef<HTMLElement>(null);
     const layerScrollRef = useRef<HTMLDivElement>(null);
     const undoStack = useRef<Psd[]>([]);
     const redoStack = useRef<Psd[]>([]);
     const psdRef = useRef<Psd | null>(null);
-    // ドラッグ中の状態を ref で管理（mousemove クロージャから参照するため）
     const dragStateRef = useRef<{ path: number[]; startY: number; moved: boolean } | null>(null);
+
+    // 【最適化3】Canvas再描画をdirtyフラグ + rAFでバッチ処理
+    const drawDirtyRef = useRef(false);
+    const drawRafRef = useRef<number | null>(null);
 
     const appWindow = getCurrentWindow();
     const handleMinimize = () => appWindow.minimize();
     const handleMaximize = () => appWindow.toggleMaximize();
     const handleClose = () => appWindow.close();
-
     const handleCloseNotification = useCallback(() => setNotification(null), []);
 
     const handleToggleExpand = useCallback((key: string) => {
-        setClosedKeys(prev => {
-            const next = new Set(prev);
-            if (next.has(key)) next.delete(key); else next.add(key);
-            return next;
-        });
+        setClosedKeys(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
     }, []);
 
     const collectGroupKeys = useCallback((layers: any[], parentPath: number[] = []): string[] => {
@@ -440,7 +351,6 @@ const PsdEditor = () => {
 
     const isChildClosed = useCallback((childKey: string) => closedKeys.has(childKey), [closedKeys]);
 
-    // 検索結果（クエリが空なら null = 通常ツリー表示）
     const searchResults = useMemo(() => {
         const q = searchQuery.trim();
         if (!q || !psd?.children) return null;
@@ -453,7 +363,6 @@ const PsdEditor = () => {
     useEffect(() => { psdRef.current = psd; }, [psd]);
 
     const MAX_UNDO = 50;
-
     const commitPsd = useCallback((next: Psd) => {
         const current = psdRef.current;
         if (!current) return;
@@ -495,9 +404,7 @@ const PsdEditor = () => {
 
     const normalizeRadioGroups = useCallback((layers: any[]): any[] => {
         const processed = layers.map((layer) =>
-            layer.children?.length > 0
-                ? { ...layer, children: normalizeRadioGroups(layer.children) }
-                : layer
+            layer.children?.length > 0 ? { ...layer, children: normalizeRadioGroups(layer.children) } : layer
         );
         const radioIndices = processed.map((l, i) => ({ l, i }))
             .filter(({ l }) => (l.name || '').startsWith('*')).map(({ i }) => i);
@@ -513,9 +420,13 @@ const PsdEditor = () => {
         try {
             const data = await readFile(path);
             const parsedPsd = readPsd(data, { skipLayerImageData: false, skipCompositeImageData: false });
-            if (parsedPsd.children) parsedPsd.children = normalizeRadioGroups(parsedPsd.children);
+            if (parsedPsd.children) {
+                parsedPsd.children = normalizeRadioGroups(parsedPsd.children);
+                // 【最適化1】ロード直後に一度だけ toDataURL を実行してキャッシュ
+                cacheDataUrls(parsedPsd.children);
+            }
             setPsd(parsedPsd);
-            setView({ zoom: 1, ox: 0, oy: 0 });
+            setZoom(1);
             centerOnLoadRef.current = true;
         } catch (err) {
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -536,30 +447,21 @@ const PsdEditor = () => {
         return () => { unlistenPromises.then(us => us.forEach(u => u())); };
     }, [loadPsdFromFilePath]);
 
-    // transform 方式: zoom + ox/oy で位置を管理
-    const [view, setView] = useState({ zoom: 1, ox: 0, oy: 0 });
-    const zoom = view.zoom;
+    // ネイティブスクロール方式
+    // zoom のみ state 管理。パンはブラウザの overflow:scroll に完全委譲。
+    const [zoom, setZoom] = useState(1);
+    const scrollRef = useRef<HTMLDivElement>(null);
     const centerOnLoadRef = useRef(false);
     const prevPsdSizeRef = useRef<{ w: number; h: number } | null>(null);
+    const MARGIN = 200;
 
-    // パン移動のクランプ（キャンバスが MARGIN px はみ出せる範囲に制限）
-    const MARGIN = 80;
-    const clampOffset = useCallback((ox: number, oy: number, z: number) => {
-        const preview = previewRef.current;
-        if (!preview || !psd) return { ox, oy };
-        const pw = preview.clientWidth, ph = preview.clientHeight;
-        const cw = psd.width * z, ch = psd.height * z;
-        return {
-            ox: Math.min(pw - MARGIN, Math.max(MARGIN - cw, ox)),
-            oy: Math.min(ph - MARGIN, Math.max(MARGIN - ch, oy)),
-        };
-    }, [psd]);
-
-    // ロード時・PSDサイズ変更時にセンタリングフラグを立てる
+    // ロード・PSDサイズ変更時にセンタリングフラグ
     useEffect(() => {
         if (!psd) return;
         const size = { w: psd.width, h: psd.height };
-        if (!prevPsdSizeRef.current || prevPsdSizeRef.current.w !== size.w || prevPsdSizeRef.current.h !== size.h) {
+        if (!prevPsdSizeRef.current ||
+            prevPsdSizeRef.current.w !== size.w ||
+            prevPsdSizeRef.current.h !== size.h) {
             prevPsdSizeRef.current = size;
             centerOnLoadRef.current = true;
         }
@@ -569,89 +471,81 @@ const PsdEditor = () => {
     useEffect(() => {
         if (!centerOnLoadRef.current || !psd) return;
         centerOnLoadRef.current = false;
-        const preview = previewRef.current;
-        if (!preview) return;
+        const el = scrollRef.current;
+        if (!el) return;
         requestAnimationFrame(() => {
-            const pw = preview.clientWidth, ph = preview.clientHeight;
-            setView(v => ({
-                zoom: v.zoom,
-                ox: (pw - psd.width * v.zoom) / 2,
-                oy: (ph - psd.height * v.zoom) / 2,
-            }));
+            el.scrollLeft = (psd.width * zoom + MARGIN * 2 - el.clientWidth) / 2;
+            el.scrollTop = (psd.height * zoom + MARGIN * 2 - el.clientHeight) / 2;
         });
-    }, [psd]);
+    }, [psd, zoom]);
 
-    // ドラッグパン
+    // Ctrl+ホイール → ズーム（カーソル下固定）
+    // パンは overflow:scroll のネイティブスクロールに完全委譲
+    const zoomRef = useRef(zoom);
+    useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+    // Ctrl+ホイール → ズームのみ JS で処理
+    // パンは overflow:scroll のネイティブスクロールに完全委譲
+    // （wheelイベントでパンを処理すると OS の軸ロックが発生するため）
     useEffect(() => {
-        const preview = previewRef.current;
-        if (!preview) return;
+        const el = scrollRef.current;
+        if (!el) return;
+        const handleWheel = (e: WheelEvent) => {
+            if (!e.ctrlKey) return; // パンはブラウザに任せる → ここで return するだけ
+            e.preventDefault();
+            if (!psdRef.current) return;
+            const mul = e.deltaMode === 1 ? 16 : 1;
+            const raw = e.deltaY * mul;
+            const factor = 1 - raw * 0.002;
+            const rect = el.getBoundingClientRect();
+            const cursorX = e.clientX - rect.left + el.scrollLeft;
+            const cursorY = e.clientY - rect.top + el.scrollTop;
+            setZoom(prev => {
+                const next = Math.min(5, Math.max(0.1, Math.round(prev * factor * 100) / 100));
+                if (next === prev) return prev;
+                const ratio = next / prev;
+                requestAnimationFrame(() => {
+                    el.scrollLeft = cursorX * ratio - (e.clientX - rect.left);
+                    el.scrollTop = cursorY * ratio - (e.clientY - rect.top);
+                });
+                return next;
+            });
+        };
+        // passive: true にしてブラウザのネイティブスクロールを妨げない
+        // Ctrl+wheel のときだけ preventDefault が必要なので passive: false は必須
+        el.addEventListener('wheel', handleWheel, { passive: false });
+        return () => el.removeEventListener('wheel', handleWheel);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // マウスドラッグパン（左/中ボタン）
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el) return;
         let dragging = false, lastX = 0, lastY = 0;
         const onMouseDown = (e: MouseEvent) => {
             if (e.button !== 0 && e.button !== 1) return;
-            // カスタムスクロールバー上のクリックはスクロールバー側が処理
-            const target = e.target as HTMLElement;
-            if (target.closest('.preview-sb-track')) return;
             dragging = true; lastX = e.clientX; lastY = e.clientY;
-            preview.style.cursor = 'grabbing';
-            e.preventDefault();
+            el.style.cursor = 'grabbing'; e.preventDefault();
         };
         const onMouseMove = (e: MouseEvent) => {
             if (!dragging) return;
-            const dx = e.clientX - lastX;
-            const dy = e.clientY - lastY;
+            el.scrollLeft -= e.clientX - lastX;
+            el.scrollTop -= e.clientY - lastY;
             lastX = e.clientX; lastY = e.clientY;
-            setView(v => {
-                const { ox, oy } = clampOffset(v.ox + dx, v.oy + dy, v.zoom);
-                return { ...v, ox, oy };
-            });
         };
-        const onMouseUp = () => { dragging = false; preview.style.cursor = ''; };
-        preview.addEventListener('mousedown', onMouseDown);
+        const onMouseUp = () => { dragging = false; el.style.cursor = ''; };
+        el.addEventListener('mousedown', onMouseDown);
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
         return () => {
-            preview.removeEventListener('mousedown', onMouseDown);
+            el.removeEventListener('mousedown', onMouseDown);
             window.removeEventListener('mousemove', onMouseMove);
             window.removeEventListener('mouseup', onMouseUp);
         };
-    }, [clampOffset]);
+    }, []);
 
-    // Ctrl+ホイールでズーム（カーソル下を固定点に）
-    useEffect(() => {
-        const preview = previewRef.current;
-        if (!preview) return;
-        const handleWheel = (e: WheelEvent) => {
-            if (!psd) return;
 
-            if (e.ctrlKey) {
-                // Ctrl+ホイール or トラックパッドのピンチ → ズーム
-                e.preventDefault();
-                const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-                const factor = 1 - raw * 0.002;
-                const rect = preview.getBoundingClientRect();
-                const cx = e.clientX - rect.left;
-                const cy = e.clientY - rect.top;
-                setView(prev => {
-                    const next = Math.min(5, Math.max(0.1, Math.round(prev.zoom * factor * 100) / 100));
-                    if (next === prev.zoom) return prev;
-                    const canvasX = (cx - prev.ox) / prev.zoom;
-                    const canvasY = (cy - prev.oy) / prev.zoom;
-                    const { ox, oy } = clampOffset(cx - canvasX * next, cy - canvasY * next, next);
-                    return { zoom: next, ox, oy };
-                });
-            } else if (e.deltaX !== 0 || e.deltaY !== 0) {
-                // 2本指スクロール → パン（preventDefault なしで慣性スクロールを妨げない）
-                const dx = e.deltaMode === 1 ? e.deltaX * 16 : e.deltaX;
-                const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-                setView(prev => {
-                    const { ox, oy } = clampOffset(prev.ox - dx, prev.oy - dy, prev.zoom);
-                    return { ...prev, ox, oy };
-                });
-            }
-        };
-        preview.addEventListener('wheel', handleWheel, { passive: false });
-        return () => preview.removeEventListener('wheel', handleWheel);
-    }, [psd, clampOffset]);
 
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
@@ -672,22 +566,15 @@ const PsdEditor = () => {
         try {
             const selected = await open({ multiple: false, filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
             if (selected && typeof selected === 'string') loadPsdFromFilePath(selected);
-        } catch (err) {
-            showToast(`Failed to open file: ${err instanceof Error ? err.message : String(err)}`, 'error');
-        }
+        } catch (err) { showToast(`Failed to open file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
     const handleSaveFile = async () => {
         if (!psd) return;
         try {
             const selected = await save({ title: 'Save PSD File', filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
-            if (selected) {
-                await writeFile(selected, new Uint8Array(writePsd(psd) as ArrayBuffer));
-                showToast('File saved successfully!');
-            }
-        } catch (err) {
-            showToast(`Failed to save file: ${err instanceof Error ? err.message : String(err)}`, 'error');
-        }
+            if (selected) { await writeFile(selected, new Uint8Array(writePsd(psd) as ArrayBuffer)); showToast('File saved successfully!'); }
+        } catch (err) { showToast(`Failed to save file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
     const handleExportPng = async () => {
@@ -701,59 +588,43 @@ const PsdEditor = () => {
                 await writeFile(selected, arr);
                 showToast('PNG exported successfully!');
             }
-        } catch (err) {
-            showToast(`Failed to export PNG: ${err instanceof Error ? err.message : String(err)}`, 'error');
-        }
+        } catch (err) { showToast(`Failed to export PNG: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
     const handleZoom = (delta: number) => {
-        const preview = previewRef.current;
-        setView(v => {
-            const next = Math.max(0.1, Math.min(5, Math.round((v.zoom + delta) * 100) / 100));
-            if (!preview) return { ...v, zoom: next };
-            const cx = preview.clientWidth / 2, cy = preview.clientHeight / 2;
-            const canvasX = (cx - v.ox) / v.zoom;
-            const canvasY = (cy - v.oy) / v.zoom;
-            const rawOx = cx - canvasX * next;
-            const rawOy = cy - canvasY * next;
-            const { ox, oy } = clampOffset(rawOx, rawOy, next);
-            return { zoom: next, ox, oy };
+        const el = scrollRef.current;
+        setZoom(prev => {
+            const next = Math.max(0.1, Math.min(5, Math.round((prev + delta) * 100) / 100));
+            if (!el || !psdRef.current) return next;
+            const cx = el.scrollLeft + el.clientWidth / 2;
+            const cy = el.scrollTop + el.clientHeight / 2;
+            const ratio = next / prev;
+            requestAnimationFrame(() => {
+                el.scrollLeft = cx * ratio - el.clientWidth / 2;
+                el.scrollTop = cy * ratio - el.clientHeight / 2;
+            });
+            return next;
         });
     };
 
     const resetZoom = () => {
-        const preview = previewRef.current;
-        if (!preview || !psd) { setView(v => ({ ...v, zoom: 1 })); return; }
-        setView({
-            zoom: 1,
-            ox: (preview.clientWidth - psd.width) / 2,
-            oy: (preview.clientHeight - psd.height) / 2,
+        const el = scrollRef.current;
+        setZoom(1);
+        if (!el || !psdRef.current) return;
+        const p = psdRef.current;
+        requestAnimationFrame(() => {
+            el.scrollLeft = (p.width + MARGIN * 2 - el.clientWidth) / 2;
+            el.scrollTop = (p.height + MARGIN * 2 - el.clientHeight) / 2;
         });
     };
 
     // ─────────────────────────────────────────────────
-    // ツリー操作ユーティリティ
+    // レイヤー操作
     // ─────────────────────────────────────────────────
-    const updateLayerByPath = (psd: Psd, path: number[], update: (layer: any) => any): Psd => {
-        const newPsd = { ...psd };
-        if (!newPsd.children) return newPsd;
-        newPsd.children = [...newPsd.children];
-        let current = newPsd.children;
-        const pathCopy = [...path];
-        const lastIdx = pathCopy.pop();
-        if (lastIdx === undefined) return newPsd;
-        for (const idx of pathCopy) {
-            current[idx] = { ...current[idx], children: [...(current[idx].children || [])] };
-            current = current[idx].children!;
-        }
-        current[lastIdx] = update(current[lastIdx]);
-        return newPsd;
-    };
-
-    const toggleLayerVisibility = (path: number[]) => {
-        if (!psd) return;
-        commitPsd(updateLayerByPath(psd, path, (l) => ({ ...l, hidden: !l.hidden })));
-    };
+    const toggleLayerVisibility = useCallback((path: number[]) => {
+        if (!psdRef.current) return;
+        commitPsd(updateLayerByPath(psdRef.current, path, (l) => ({ ...l, hidden: !l.hidden })));
+    }, [commitPsd]);
 
     const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const renameSessionRef = useRef(false);
@@ -761,34 +632,26 @@ const PsdEditor = () => {
     const renameLayer = useCallback((path: number[], newName: string) => {
         if (!psdRef.current) return;
         const updated = updateLayerByPath(psdRef.current, path, (l) => ({ ...l, name: newName }));
-        if (!renameSessionRef.current) {
-            renameSessionRef.current = true;
-            commitPsd(updated);
-        } else {
-            if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-            setPsd(updated);
-        }
+        if (!renameSessionRef.current) { renameSessionRef.current = true; commitPsd(updated); }
+        else { if (renameTimerRef.current) clearTimeout(renameTimerRef.current); setPsd(updated); }
         if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
         renameTimerRef.current = setTimeout(() => { renameTimerRef.current = null; renameSessionRef.current = false; }, 600);
     }, [commitPsd]);
 
-    const toggleRadioLayer = (path: number[], siblings: any[]) => {
-        if (!psd) return;
+    const toggleRadioLayer = useCallback((path: number[], siblings: any[]) => {
+        if (!psdRef.current) return;
         const selectedIdx = path[path.length - 1];
         const parentPath = path.slice(0, -1);
-        let currentPsd = psd;
+        let currentPsd = psdRef.current;
         siblings.forEach((sibling: any, idx: number) => {
             if (!(sibling.name || '').startsWith('*')) return;
             const shouldHide = idx !== selectedIdx;
             if (sibling.hidden !== shouldHide)
                 currentPsd = updateLayerByPath(currentPsd, [...parentPath, idx], (l) => ({ ...l, hidden: shouldHide }));
         });
-        if (currentPsd !== psd) commitPsd(currentPsd);
-    };
+        if (currentPsd !== psdRef.current) commitPsd(currentPsd);
+    }, [commitPsd]);
 
-    // ─────────────────────────────────────────────────
-    // レイヤー追加
-    // ─────────────────────────────────────────────────
     const handleAddLayer = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
@@ -801,111 +664,68 @@ const PsdEditor = () => {
         commitPsd({ ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] });
     }, [commitPsd]);
 
-    // ─────────────────────────────────────────────────
-    // レイヤー削除
-    // ─────────────────────────────────────────────────
     const handleDeleteLayer = useCallback((path: number[]) => {
         if (!psdRef.current) return;
-        const cur = psdRef.current;
-
         const deleteAt = (psd: Psd, path: number[]): Psd => {
             const newPsd = { ...psd, children: [...(psd.children || [])] };
             let arr = newPsd.children;
             const pathCopy = [...path];
             const lastIdx = pathCopy.pop()!;
-            for (const idx of pathCopy) {
-                arr[idx] = { ...arr[idx], children: [...(arr[idx].children || [])] };
-                arr = arr[idx].children!;
-            }
+            for (const idx of pathCopy) { arr[idx] = { ...arr[idx], children: [...(arr[idx].children || [])] }; arr = arr[idx].children!; }
             arr.splice(lastIdx, 1);
             return newPsd;
         };
-
-        commitPsd(deleteAt(cur, path));
+        commitPsd(deleteAt(psdRef.current, path));
     }, [commitPsd]);
 
     // ─────────────────────────────────────────────────
-    // ドラッグ＆ドロップ並び替え
+    // 【最適化4】ドラッグ: mousemoveをthrottleし、位置キャッシュを使用
     // ─────────────────────────────────────────────────
+    const itemRectsRef = useRef<{ el: HTMLElement; rect: DOMRect; path: number[]; isGroup: boolean }[]>([]);
 
-    /**
-     * スクロールコンテナ内の data-path 付き要素をスキャンして
-     * マウス座標に最も近いドロップターゲットを返す
-     */
-    const findDropTarget = useCallback((clientY: number): DropTargetInfo | null => {
+    const cacheItemRects = useCallback(() => {
         const scroll = layerScrollRef.current;
-        if (!scroll) return null;
+        if (!scroll) return;
         const items = Array.from(scroll.querySelectorAll<HTMLElement>('[data-path]'));
+        itemRectsRef.current = items.map(el => ({
+            el,
+            rect: el.getBoundingClientRect(),
+            path: (el.getAttribute('data-path') ?? '').split('-').map(Number),
+            isGroup: el.getAttribute('data-group') === 'true',
+        }));
+    }, []);
+
+    const findDropTargetFromCache = useCallback((clientY: number): DropTargetInfo | null => {
+        const items = itemRectsRef.current;
         if (!items.length) return null;
-
         let best: (DropTargetInfo & { dist: number }) | null = null;
-
-        for (const el of items) {
-            const rect = el.getBoundingClientRect();
-            const pathStr = el.getAttribute('data-path') ?? '';
-            const path = pathStr.split('-').map(Number);
-            const isGroup = el.getAttribute('data-group') === 'true';
+        for (const { rect, path, isGroup } of items) {
             const zone = rect.height * 0.25;
-
             let position: 'before' | 'after' | 'inside';
             let dist: number;
-
-            if (clientY < rect.top + zone) {
-                position = 'before'; dist = Math.abs(clientY - rect.top);
-            } else if (clientY > rect.bottom - zone) {
-                position = 'after'; dist = Math.abs(clientY - rect.bottom);
-            } else if (isGroup) {
-                position = 'inside'; dist = Math.abs(clientY - (rect.top + rect.height / 2));
-            } else {
-                position = clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-                dist = Math.abs(clientY - (rect.top + rect.height / 2));
-            }
-
+            if (clientY < rect.top + zone) { position = 'before'; dist = Math.abs(clientY - rect.top); }
+            else if (clientY > rect.bottom - zone) { position = 'after'; dist = Math.abs(clientY - rect.bottom); }
+            else if (isGroup) { position = 'inside'; dist = Math.abs(clientY - (rect.top + rect.height / 2)); }
+            else { position = clientY < rect.top + rect.height / 2 ? 'before' : 'after'; dist = Math.abs(clientY - (rect.top + rect.height / 2)); }
             if (!best || dist < best.dist) best = { path, position, dist };
         }
-
         return best ? { path: best.path, position: best.position } : null;
     }, []);
 
-    /**
-     * ソース srcPath のレイヤーをドロップターゲット位置に移動する。
-     *
-     * 【重要】レイヤーリストは children を reverse() して表示しているため
-     * 画面上の「上」= 配列の末尾方向（高インデックス）
-     * 画面上の「下」= 配列の先頭方向（低インデックス）
-     *
-     * findDropTarget が返す before/after は画面座標基準なので
-     * 配列操作に変換する際は反転が必要:
-     *   画面 before（上に挿入）→ 配列 after（insertIdx + 1）
-     *   画面 after（下に挿入）  → 配列 before（insertIdx そのまま）
-     */
     const applyDrop = useCallback((srcPath: number[], dst: DropTargetInfo) => {
         const current = psdRef.current;
         if (!current?.children) return;
-
-        // ツリーをディープコピー
-        const cloneTree = (layers: any[]): any[] =>
-            layers.map(l => ({ ...l, children: l.children ? cloneTree(l.children) : undefined }));
+        const cloneTree = (layers: any[]): any[] => layers.map(l => ({ ...l, children: l.children ? cloneTree(l.children) : undefined }));
         const newChildren = cloneTree(current.children);
-
-        // 1. ソースを取り出す
         const srcParentPath = srcPath.slice(0, -1);
         const srcIdx = srcPath[srcPath.length - 1];
         const srcArr = srcParentPath.length === 0 ? newChildren : getLayersAtPath(newChildren, srcParentPath);
         const [srcLayer] = srcArr.splice(srcIdx, 1);
-
-        // 2. 同一親内のとき、srcIdx の splice によって dstIdx がずれる補正。
-        //    srcIdx < dstIdx の場合、splice でその要素が消えるため dstIdx を -1 する。
         let dstPath = [...dst.path];
         const dstParentPath = dstPath.slice(0, -1);
         const isSameParent = srcParentPath.join('-') === dstParentPath.join('-');
-        if (isSameParent && srcIdx < dstPath[dstPath.length - 1]) {
-            dstPath[dstPath.length - 1]--;
-        }
-
-        // 3. 挿入
+        if (isSameParent && srcIdx < dstPath[dstPath.length - 1]) dstPath[dstPath.length - 1]--;
         if (dst.position === 'inside') {
-            // グループの末尾に push（reverse 表示では先頭に見える）
             const dstGroup = dstPath.length === 0
                 ? { children: newChildren }
                 : getLayersAtPath(newChildren, dstPath.slice(0, -1))[dstPath[dstPath.length - 1]] as any;
@@ -914,63 +734,53 @@ const PsdEditor = () => {
         } else {
             const dstArr = dstParentPath.length === 0 ? newChildren : getLayersAtPath(newChildren, dstParentPath);
             let insertIdx = dstPath[dstPath.length - 1];
-            // 表示 reverse のため before/after を反転
             if (dst.position === 'before') insertIdx++;
             dstArr.splice(insertIdx, 0, srcLayer);
         }
-
         commitPsd({ ...current, children: newChildren });
     }, [commitPsd]);
 
-    /**
-     * ドラッグ開始（LayerItem の GripVertical onMouseDown から呼ばれる）
-     */
     const handleLayerDragStart = useCallback((e: React.MouseEvent, path: number[]) => {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         dragStateRef.current = { path, startY: e.clientY, moved: false };
         setDraggingPath(path);
+        // ドラッグ開始時にDOMの位置をキャッシュ（mousemove中はDOMを触らない）
+        cacheItemRects();
+
+        // throttle: 32ms≒30fps でドロップターゲット更新
+        const throttledMove = throttle((ev: MouseEvent) => {
+            if (!dragStateRef.current) return;
+            const target = findDropTargetFromCache(ev.clientY);
+            if (target) {
+                const dragKey = dragStateRef.current.path.join('-');
+                const targetKey = target.path.join('-');
+                if (targetKey !== dragKey && !targetKey.startsWith(dragKey + '-')) { setDropTarget(target); return; }
+            }
+            setDropTarget(null);
+        }, 32);
 
         const onMouseMove = (ev: MouseEvent) => {
             if (!dragStateRef.current) return;
             if (Math.abs(ev.clientY - dragStateRef.current.startY) > 3) dragStateRef.current.moved = true;
-
-            const target = findDropTarget(ev.clientY);
-            if (target) {
-                const dragKey = dragStateRef.current.path.join('-');
-                const targetKey = target.path.join('-');
-                // 自身・子孫へのドロップは無効
-                if (targetKey !== dragKey && !targetKey.startsWith(dragKey + '-')) {
-                    setDropTarget(target);
-                    return;
-                }
-            }
-            setDropTarget(null);
+            throttledMove(ev);
         };
-
         const onMouseUp = (ev: MouseEvent) => {
             window.removeEventListener('mousemove', onMouseMove);
             window.removeEventListener('mouseup', onMouseUp);
-
             const state = dragStateRef.current;
             dragStateRef.current = null;
-            setDraggingPath(null);
-            setDropTarget(null);
-
+            setDraggingPath(null); setDropTarget(null);
             if (!state?.moved) return;
-
-            // mouseup 時点でのドロップターゲットを再計算して適用
-            const target = findDropTarget(ev.clientY);
+            const target = findDropTargetFromCache(ev.clientY);
             if (!target) return;
             const dragKey = state.path.join('-');
             const targetKey = target.path.join('-');
             if (targetKey === dragKey || targetKey.startsWith(dragKey + '-')) return;
             applyDrop(state.path, target);
         };
-
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
-    }, [findDropTarget, applyDrop]);
+    }, [cacheItemRects, findDropTargetFromCache, applyDrop]);
 
     // ─────────────────────────────────────────────────
     // flip ヘルパー
@@ -982,40 +792,41 @@ const PsdEditor = () => {
         return '';
     }, [flipX, flipY]);
 
-    const getBaseName = useCallback((name: string): string =>
-        name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
-
-    const hasFlipSuffix = useCallback((name: string): boolean =>
-        /(:[Ff]lip(xy|x|y))$/i.test(name), []);
+    const getBaseName = useCallback((name: string): string => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
+    const hasFlipSuffix = useCallback((name: string): boolean => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
 
     // ─────────────────────────────────────────────────
-    // 描画
+    // 【最適化3】Canvas描画: dirtyフラグ + rAFでバッチ
+    // psd/flip が変わったらフラグを立て、rAFで一度だけ描画
     // ─────────────────────────────────────────────────
-    useEffect(() => {
-        if (!psd || !canvasRef.current) return;
+    const drawCanvas = useCallback(() => {
         const canvas = canvasRef.current;
+        const currentPsd = psdRef.current;
+        if (!canvas || !currentPsd) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
-        canvas.width = psd.width;
-        canvas.height = psd.height;
-        ctx.clearRect(0, 0, psd.width, psd.height);
+
+        canvas.width = currentPsd.width;
+        canvas.height = currentPsd.height;
+        ctx.clearRect(0, 0, currentPsd.width, currentPsd.height);
+
+        const currentFlipX = flipX, currentFlipY = flipY;
         const flipSuffix = flipEnabled ? getFlipSuffix() : '';
+
         ctx.save();
-        if (flipX && flipY) { ctx.translate(psd.width, psd.height); ctx.scale(-1, -1); }
-        else if (flipX) { ctx.translate(psd.width, 0); ctx.scale(-1, 1); }
-        else if (flipY) { ctx.translate(0, psd.height); ctx.scale(1, -1); }
+        if (currentFlipX && currentFlipY) { ctx.translate(currentPsd.width, currentPsd.height); ctx.scale(-1, -1); }
+        else if (currentFlipX) { ctx.translate(currentPsd.width, 0); ctx.scale(-1, 1); }
+        else if (currentFlipY) { ctx.translate(0, currentPsd.height); ctx.scale(1, -1); }
 
         const buildFlipVariantMap = (layers: any[]) => {
             const map = new Map<string, any>();
             if (!flipSuffix) return map;
             for (const l of layers) {
                 const lowerName = (l.name || '').toLowerCase();
-                if (lowerName.endsWith(flipSuffix.toLowerCase()))
-                    map.set(getBaseName(l.name || '').toLowerCase(), l);
+                if (lowerName.endsWith(flipSuffix.toLowerCase())) map.set(getBaseName(l.name || '').toLowerCase(), l);
             }
             return map;
         };
-
         const drawLayers = (layers: any[]) => {
             const flipVariantMap = buildFlipVariantMap(layers);
             for (const layer of layers) {
@@ -1024,15 +835,24 @@ const PsdEditor = () => {
                 if (hasFlipSuffix(name)) continue;
                 const effectiveLayer = flipVariantMap.get(name.toLowerCase()) ?? layer;
                 if (effectiveLayer.children) drawLayers(effectiveLayer.children);
-                else if (effectiveLayer.canvas)
-                    ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                else if (effectiveLayer.canvas) ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
             }
         };
 
-        if (psd.children && psd.children.length > 0) drawLayers(psd.children);
-        else if (psd.canvas) ctx.drawImage(psd.canvas, 0, 0);
+        if (currentPsd.children && currentPsd.children.length > 0) drawLayers(currentPsd.children as any[]);
+        else if (currentPsd.canvas) ctx.drawImage(currentPsd.canvas, 0, 0);
         ctx.restore();
-    }, [psd, flipX, flipY, flipEnabled, getFlipSuffix, getBaseName, hasFlipSuffix]);
+
+        drawDirtyRef.current = false;
+    }, [flipX, flipY, flipEnabled, getFlipSuffix, getBaseName, hasFlipSuffix]);
+
+    useEffect(() => {
+        if (!psd) return;
+        drawDirtyRef.current = true;
+        if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
+        drawRafRef.current = requestAnimationFrame(() => { drawCanvas(); drawRafRef.current = null; });
+        return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
+    }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
 
     // ─────────────────────────────────────────────────
     // JSX
@@ -1083,7 +903,6 @@ const PsdEditor = () => {
 
             <div className="editor-main">
                 <aside className="layer-panel">
-                    {/* パネルヘッダー */}
                     <div className="panel-header">
                         <h2>Layers</h2>
                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
@@ -1099,32 +918,23 @@ const PsdEditor = () => {
                         </div>
                     </div>
 
-                    {/* 検索バー */}
                     {psd && (
                         <div className="layer-search-bar">
                             <Search size={12} className="layer-search-icon" />
                             <input
-                                ref={searchInputRef}
-                                type="text"
-                                className="layer-search-input"
-                                placeholder="Search layers..."
-                                value={searchQuery}
+                                ref={searchInputRef} type="text" className="layer-search-input"
+                                placeholder="Search layers..." value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
                             />
                             {searchQuery && (
-                                <button
-                                    className="layer-search-clear"
-                                    onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }}
-                                    title="Clear search"
-                                >
+                                <button className="layer-search-clear" onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }} title="Clear search">
                                     <X size={11} />
                                 </button>
                             )}
                         </div>
                     )}
 
-                    {/* モードバー（検索中は非表示） */}
                     {!searchResults && (
                         <div className="layer-mode-bar">
                             <button className={`mode-toggle ${radioEnabled ? 'active' : ''}`} onClick={() => setRadioEnabled(v => !v)} title="Radio group mode"><Asterisk size={13} /><span>Radio</span></button>
@@ -1133,50 +943,34 @@ const PsdEditor = () => {
                         </div>
                     )}
 
-                    {/* レイヤーリスト */}
                     <div className="layer-scroll" ref={layerScrollRef}>
                         {psd && psd.children ? (
                             searchResults ? (
-                                /* 検索結果フラットリスト */
                                 searchResults.length > 0 ? (
                                     <div className="search-results-list">
                                         {searchResults.map((result) => (
-                                            <SearchResultRow
-                                                key={result.path.join('-')}
-                                                result={result}
-                                                onToggle={toggleLayerVisibility}
-                                            />
+                                            <SearchResultRow key={result.path.join('-')} result={result} onToggle={toggleLayerVisibility} />
                                         ))}
                                     </div>
                                 ) : (
-                                    <div className="empty-state">
-                                        <p>No layers found</p>
-                                    </div>
+                                    <div className="empty-state"><p>No layers found</p></div>
                                 )
                             ) : (
-                                /* 通常ツリー表示 */
                                 <ul className="layer-list">
                                     {[...psd.children].reverse().map((layer, index, array) => {
                                         const originalIndex = array.length - 1 - index;
                                         if (flipEnabled && hasFlipSuffix(layer.name || '')) return null;
                                         return (
                                             <LayerItem
-                                                key={originalIndex}
-                                                layer={layer}
-                                                path={[originalIndex]}
-                                                siblings={psd.children!}
-                                                radioEnabled={radioEnabled}
-                                                lockedEnabled={lockedEnabled}
-                                                isClosed={closedKeys.has(String(originalIndex))}
-                                                isChildClosed={isChildClosed}
-                                                onToggleExpand={handleToggleExpand}
-                                                onToggle={toggleLayerVisibility}
-                                                onRename={renameLayer}
-                                                onRadioSelect={toggleRadioLayer}
-                                                onDelete={handleDeleteLayer}
-                                                onDragStart={handleLayerDragStart}
-                                                draggingPath={draggingPath}
-                                                dropTarget={dropTarget}
+                                                key={originalIndex} layer={layer} path={[originalIndex]}
+                                                siblings={psd.children!} radioEnabled={radioEnabled}
+                                                lockedEnabled={lockedEnabled} flipEnabled={flipEnabled}
+                                                isClosed={closedKeys.has(String(originalIndex))} isChildClosed={isChildClosed}
+                                                onToggleExpand={handleToggleExpand} onToggle={toggleLayerVisibility}
+                                                onRename={renameLayer} onRadioSelect={toggleRadioLayer}
+                                                onDelete={handleDeleteLayer} onDragStart={handleLayerDragStart}
+                                                draggingPath={draggingPath} dropTarget={dropTarget}
+                                                hasFlipSuffix={hasFlipSuffix}
                                             />
                                         );
                                     })}
@@ -1190,127 +984,52 @@ const PsdEditor = () => {
                     </div>
                 </aside>
 
-                <section className="preview-panel" ref={previewRef as React.RefObject<HTMLElement>}>
-                    {psd ? (() => {
-                        const pw = previewRef.current?.clientWidth ?? 0;
-                        const ph = previewRef.current?.clientHeight ?? 0;
-                        const cw = psd.width * zoom;
-                        const ch = psd.height * zoom;
-                        const SB = 8; // スクロールバーの太さ
-
-                        // スクロール可能な仮想空間サイズ（キャンバス + 余白）
-                        const MARGIN = 80;
-                        const virtualW = cw + MARGIN * 2;
-                        const virtualH = ch + MARGIN * 2;
-
-                        // キャンバス左上が仮想空間内でどこにあるか
-                        // ox はキャンバス左上のビューポート座標 → 仮想空間内オフセット = MARGIN - ox
-                        const scrollX = MARGIN - view.ox;
-                        const scrollY = MARGIN - view.oy;
-
-                        // 横スクロールバーのサム
-                        const trackW = pw - SB;
-                        const thumbW = Math.max(20, trackW * (pw / Math.max(virtualW, pw)));
-                        const thumbX = virtualW <= pw ? 0 : (scrollX / (virtualW - pw)) * (trackW - thumbW);
-
-                        // 縦スクロールバーのサム
-                        const trackH = ph - SB;
-                        const thumbH = Math.max(20, trackH * (ph / Math.max(virtualH, ph)));
-                        const thumbY = virtualH <= ph ? 0 : (scrollY / (virtualH - ph)) * (trackH - thumbH);
-
-                        const showSbX = virtualW > pw;
-                        const showSbY = virtualH > ph;
-
-                        return (<>
+                <div
+                    className="preview-panel"
+                    ref={scrollRef}
+                >
+                    {psd ? (
+                        <div className="preview-scroll-inner" style={{
+                            width: psd.width * zoom + MARGIN * 2,
+                            height: psd.height * zoom + MARGIN * 2,
+                            position: 'relative',
+                            minWidth: '100%',
+                            minHeight: '100%',
+                        }}>
                             <div
                                 className="canvas-container"
                                 style={{
                                     position: 'absolute',
-                                    left: view.ox,
-                                    top: view.oy,
+                                    left: MARGIN,
+                                    top: MARGIN,
                                     width: psd.width,
                                     height: psd.height,
                                     transform: `scale(${zoom})`,
                                     transformOrigin: 'top left',
-                                    zIndex: 1,
                                 }}
                             >
                                 <canvas ref={canvasRef} />
                             </div>
-
-                            {/* 横スクロールバー */}
-                            {showSbX && (
-                                <div
-                                    className="preview-sb-track preview-sb-track-x"
-                                    style={{ bottom: showSbY ? SB : 0 }}
-                                    onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        const trackEl = e.currentTarget;
-                                        const startX = e.clientX;
-                                        const startScrollX = scrollX;
-                                        const ratio = (virtualW - pw) / (trackW - thumbW);
-                                        const move = (ev: MouseEvent) => {
-                                            const newScrollX = Math.max(0, Math.min(virtualW - pw,
-                                                startScrollX + (ev.clientX - startX) * ratio));
-                                            setView(v => ({ ...v, ox: MARGIN - newScrollX }));
-                                        };
-                                        const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-                                        window.addEventListener('mousemove', move);
-                                        window.addEventListener('mouseup', up);
-                                    }}
-                                >
-                                    <div className="preview-sb-thumb" style={{ left: thumbX, width: thumbW }} />
-                                </div>
-                            )}
-
-                            {/* 縦スクロールバー */}
-                            {showSbY && (
-                                <div
-                                    className="preview-sb-track preview-sb-track-y"
-                                    style={{ right: showSbX ? SB : 0 }}
-                                    onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        const startY = e.clientY;
-                                        const startScrollY = scrollY;
-                                        const ratio = (virtualH - ph) / (trackH - thumbH);
-                                        const move = (ev: MouseEvent) => {
-                                            const newScrollY = Math.max(0, Math.min(virtualH - ph,
-                                                startScrollY + (ev.clientY - startY) * ratio));
-                                            setView(v => ({ ...v, oy: MARGIN - newScrollY }));
-                                        };
-                                        const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-                                        window.addEventListener('mousemove', move);
-                                        window.addEventListener('mouseup', up);
-                                    }}
-                                >
-                                    <div className="preview-sb-thumb" style={{ top: thumbY, height: thumbH }} />
-                                </div>
-                            )}
-                        </>);
-                    })() : (
-                        <div className="placeholder">
+                        </div>
+                    ) : (
+                        <div className="placeholder" style={{ position: 'absolute', inset: 0 }}>
                             <Monitor className="placeholder-icon" />
                             <p>Drag and drop or import a PSD file to start</p>
                         </div>
                     )}
-                </section>
+                </div>
             </div>
 
             {isDragging && (
                 <div className="drag-overlay">
                     <div className="drag-message">
                         <div className="overlay-icon-ring"><Download size={48} /></div>
-                        <div className="overlay-text">
-                            <h3>Ready to Import</h3>
-                            <p>Release to open your PSD masterpiece</p>
-                        </div>
+                        <div className="overlay-text"><h3>Ready to Import</h3><p>Release to open your PSD masterpiece</p></div>
                     </div>
                 </div>
             )}
 
-            {notification && (
-                <Toast message={notification.message} type={notification.type} onClose={handleCloseNotification} />
-            )}
+            {notification && <Toast message={notification.message} type={notification.type} onClose={handleCloseNotification} />}
         </div>
     );
 };

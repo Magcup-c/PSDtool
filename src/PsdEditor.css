@@ -1103,55 +1103,45 @@ canvas {
    プレビューパネル スクロールバー対応
 ───────────────────────────────────── */
 
-/* transform 方式: overflow hidden + カスタムスクロールバー */
 .preview-panel {
-    overflow: hidden !important;
+    flex: 1;
+    background: var(--bg);
+    /* overflow:scroll にするとブラウザのネイティブスクロールが有効になり
+       トラックパッドの2本指パンがOS軸ロックなしで動作する */
+    overflow: scroll;
+    position: relative;
     cursor: grab;
+
+    /* スクロールバーを非表示（スクロール機能は維持） */
+    scrollbar-width: none;
+    /* Firefox */
+    -ms-overflow-style: none;
+    /* IE / Edge Legacy */
+}
+
+.preview-panel::-webkit-scrollbar {
+    display: none;
+    /* Chrome / Safari / Tauri WebView */
 }
 
 .preview-panel:active {
     cursor: grabbing;
 }
 
-/* ─── カスタムスクロールバー ─── */
-.preview-sb-track {
-    position: absolute;
-    background: transparent;
-    z-index: 10;
-    pointer-events: auto;
+/* dot grid を ::after で描画するのをやめ、
+   内側の .preview-scroll-inner に background で描画する
+   （::after は position:absolute になるためスクロールに追従しない） */
+.preview-panel::after {
+    display: none;
 }
 
-.preview-sb-track-x {
-    left: 0;
-    height: 8px;
+.preview-scroll-inner {
+    background-image: radial-gradient(circle, var(--line) 1px, transparent 1px);
+    background-size: 20px 20px;
 }
 
-.preview-sb-track-y {
-    top: 0;
-    width: 8px;
-}
-
+/* カスタムスクロールバーは不要 */
+.preview-sb-track,
 .preview-sb-thumb {
-    position: absolute;
-    background: var(--line-mid);
-    border-radius: 99px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-    transition: background 120ms ease;
-    cursor: pointer;
-}
-
-.preview-sb-track-x .preview-sb-thumb {
-    top: 0;
-    height: 100%;
-}
-
-.preview-sb-track-y .preview-sb-thumb {
-    left: 0;
-    width: 100%;
-}
-
-.preview-sb-track:hover .preview-sb-thumb {
-    background: var(--fg-3);
-    background-clip: content-box;
+    display: none;
 }
