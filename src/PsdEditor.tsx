@@ -515,7 +515,7 @@ const PsdEditor = () => {
             const parsedPsd = readPsd(data, { skipLayerImageData: false, skipCompositeImageData: false });
             if (parsedPsd.children) parsedPsd.children = normalizeRadioGroups(parsedPsd.children);
             setPsd(parsedPsd);
-            setZoom(1);
+            setView({ zoom: 1, ox: 0, oy: 0 });
             centerOnLoadRef.current = true;
         } catch (err) {
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -536,13 +536,24 @@ const PsdEditor = () => {
         return () => { unlistenPromises.then(us => us.forEach(u => u())); };
     }, [loadPsdFromFilePath]);
 
-    // ズーム値のみ state で管理。パン位置はスクロールコンテナの scrollLeft/scrollTop で管理。
-    const [zoom, setZoom] = useState(1);
+    // transform 方式: zoom + ox/oy で位置を管理
+    const [view, setView] = useState({ zoom: 1, ox: 0, oy: 0 });
+    const zoom = view.zoom;
     const centerOnLoadRef = useRef(false);
     const prevPsdSizeRef = useRef<{ w: number; h: number } | null>(null);
 
-    // キャンバス周囲の余白 (px)。この余白があることでキャンバス外側にもスクロールできる。
-    const SCROLL_PADDING = 200;
+    // パン移動のクランプ（キャンバスが MARGIN px はみ出せる範囲に制限）
+    const MARGIN = 80;
+    const clampOffset = useCallback((ox: number, oy: number, z: number) => {
+        const preview = previewRef.current;
+        if (!preview || !psd) return { ox, oy };
+        const pw = preview.clientWidth, ph = preview.clientHeight;
+        const cw = psd.width * z, ch = psd.height * z;
+        return {
+            ox: Math.min(pw - MARGIN, Math.max(MARGIN - cw, ox)),
+            oy: Math.min(ph - MARGIN, Math.max(MARGIN - ch, oy)),
+        };
+    }, [psd]);
 
     // ロード時・PSDサイズ変更時にセンタリングフラグを立てる
     useEffect(() => {
@@ -554,37 +565,45 @@ const PsdEditor = () => {
         }
     }, [psd]);
 
-    // センタリング: スクロール位置をキャンバス中央に合わせる
+    // センタリング
     useEffect(() => {
         if (!centerOnLoadRef.current || !psd) return;
         centerOnLoadRef.current = false;
         const preview = previewRef.current;
         if (!preview) return;
         requestAnimationFrame(() => {
-            const scaledW = psd.width * zoom;
-            const scaledH = psd.height * zoom;
-            const totalW = scaledW + SCROLL_PADDING * 2;
-            const totalH = scaledH + SCROLL_PADDING * 2;
-            preview.scrollLeft = (totalW - preview.clientWidth) / 2;
-            preview.scrollTop = (totalH - preview.clientHeight) / 2;
+            const pw = preview.clientWidth, ph = preview.clientHeight;
+            setView(v => ({
+                zoom: v.zoom,
+                ox: (pw - psd.width * v.zoom) / 2,
+                oy: (ph - psd.height * v.zoom) / 2,
+            }));
         });
-    }, [psd, zoom]);
+    }, [psd]);
 
-    // ドラッグパン: mousemove で scrollLeft/scrollTop を更新
+    // ドラッグパン
     useEffect(() => {
         const preview = previewRef.current;
         if (!preview) return;
         let dragging = false, lastX = 0, lastY = 0;
         const onMouseDown = (e: MouseEvent) => {
             if (e.button !== 0 && e.button !== 1) return;
+            // カスタムスクロールバー上のクリックはスクロールバー側が処理
+            const target = e.target as HTMLElement;
+            if (target.closest('.preview-sb-track')) return;
             dragging = true; lastX = e.clientX; lastY = e.clientY;
-            preview.style.cursor = 'grabbing'; e.preventDefault();
+            preview.style.cursor = 'grabbing';
+            e.preventDefault();
         };
         const onMouseMove = (e: MouseEvent) => {
             if (!dragging) return;
-            preview.scrollLeft -= e.clientX - lastX;
-            preview.scrollTop -= e.clientY - lastY;
+            const dx = e.clientX - lastX;
+            const dy = e.clientY - lastY;
             lastX = e.clientX; lastY = e.clientY;
+            setView(v => {
+                const { ox, oy } = clampOffset(v.ox + dx, v.oy + dy, v.zoom);
+                return { ...v, ox, oy };
+            });
         };
         const onMouseUp = () => { dragging = false; preview.style.cursor = ''; };
         preview.addEventListener('mousedown', onMouseDown);
@@ -595,40 +614,44 @@ const PsdEditor = () => {
             window.removeEventListener('mousemove', onMouseMove);
             window.removeEventListener('mouseup', onMouseUp);
         };
-    }, []);
+    }, [clampOffset]);
 
-    // Ctrl+ホイールでズーム。カーソル下のキャンバス座標を固定点にスクロール補正。
+    // Ctrl+ホイールでズーム（カーソル下を固定点に）
     useEffect(() => {
         const preview = previewRef.current;
         if (!preview) return;
         const handleWheel = (e: WheelEvent) => {
-            if (!e.ctrlKey) return;
-            e.preventDefault();
             if (!psd) return;
-            const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-            const factor = 1 - raw * 0.002;
-            const rect = preview.getBoundingClientRect();
-            // カーソルのビューポート内座標
-            const cx = e.clientX - rect.left;
-            const cy = e.clientY - rect.top;
-            setZoom(prev => {
-                const next = Math.min(5, Math.max(0.1, Math.round(prev * factor * 100) / 100));
-                if (next === prev) return prev;
-                // カーソル下のコンテンツ座標（スクロール込み）
-                const contentX = cx + preview.scrollLeft;
-                const contentY = cy + preview.scrollTop;
-                // ズーム前後でコンテンツ座標が同じ画面位置に来るようスクロールを補正
-                const scale = next / prev;
-                requestAnimationFrame(() => {
-                    preview.scrollLeft = contentX * scale - cx;
-                    preview.scrollTop = contentY * scale - cy;
+
+            if (e.ctrlKey) {
+                // Ctrl+ホイール or トラックパッドのピンチ → ズーム
+                e.preventDefault();
+                const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+                const factor = 1 - raw * 0.002;
+                const rect = preview.getBoundingClientRect();
+                const cx = e.clientX - rect.left;
+                const cy = e.clientY - rect.top;
+                setView(prev => {
+                    const next = Math.min(5, Math.max(0.1, Math.round(prev.zoom * factor * 100) / 100));
+                    if (next === prev.zoom) return prev;
+                    const canvasX = (cx - prev.ox) / prev.zoom;
+                    const canvasY = (cy - prev.oy) / prev.zoom;
+                    const { ox, oy } = clampOffset(cx - canvasX * next, cy - canvasY * next, next);
+                    return { zoom: next, ox, oy };
                 });
-                return next;
-            });
+            } else if (e.deltaX !== 0 || e.deltaY !== 0) {
+                // 2本指スクロール → パン（preventDefault なしで慣性スクロールを妨げない）
+                const dx = e.deltaMode === 1 ? e.deltaX * 16 : e.deltaX;
+                const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+                setView(prev => {
+                    const { ox, oy } = clampOffset(prev.ox - dx, prev.oy - dy, prev.zoom);
+                    return { ...prev, ox, oy };
+                });
+            }
         };
         preview.addEventListener('wheel', handleWheel, { passive: false });
         return () => preview.removeEventListener('wheel', handleWheel);
-    }, [psd]);
+    }, [psd, clampOffset]);
 
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
@@ -685,33 +708,26 @@ const PsdEditor = () => {
 
     const handleZoom = (delta: number) => {
         const preview = previewRef.current;
-        setZoom(prev => {
-            const next = Math.max(0.1, Math.min(5, Math.round((prev + delta) * 100) / 100));
-            if (!preview || !psd) return next;
-            // プレビュー中央を固定点にスクロール補正
-            const cx = preview.clientWidth / 2;
-            const cy = preview.clientHeight / 2;
-            const contentX = cx + preview.scrollLeft;
-            const contentY = cy + preview.scrollTop;
-            const scale = next / prev;
-            requestAnimationFrame(() => {
-                preview.scrollLeft = contentX * scale - cx;
-                preview.scrollTop = contentY * scale - cy;
-            });
-            return next;
+        setView(v => {
+            const next = Math.max(0.1, Math.min(5, Math.round((v.zoom + delta) * 100) / 100));
+            if (!preview) return { ...v, zoom: next };
+            const cx = preview.clientWidth / 2, cy = preview.clientHeight / 2;
+            const canvasX = (cx - v.ox) / v.zoom;
+            const canvasY = (cy - v.oy) / v.zoom;
+            const rawOx = cx - canvasX * next;
+            const rawOy = cy - canvasY * next;
+            const { ox, oy } = clampOffset(rawOx, rawOy, next);
+            return { zoom: next, ox, oy };
         });
     };
 
     const resetZoom = () => {
         const preview = previewRef.current;
-        if (!preview || !psd) { setZoom(1); return; }
-        setZoom(1);
-        // zoom=1 でセンタリング
-        requestAnimationFrame(() => {
-            const totalW = psd.width + SCROLL_PADDING * 2;
-            const totalH = psd.height + SCROLL_PADDING * 2;
-            preview.scrollLeft = (totalW - preview.clientWidth) / 2;
-            preview.scrollTop = (totalH - preview.clientHeight) / 2;
+        if (!preview || !psd) { setView(v => ({ ...v, zoom: 1 })); return; }
+        setView({
+            zoom: 1,
+            ox: (preview.clientWidth - psd.width) / 2,
+            oy: (preview.clientHeight - psd.height) / 2,
         });
     };
 
@@ -1175,32 +1191,103 @@ const PsdEditor = () => {
                 </aside>
 
                 <section className="preview-panel" ref={previewRef as React.RefObject<HTMLElement>}>
-                    {psd ? (
-                        // スクロール wrapper: zoom されたキャンバス + 周囲の余白 SCROLL_PADDING を実サイズで確保
-                        <div style={{
-                            width: psd.width * zoom + SCROLL_PADDING * 2,
-                            height: psd.height * zoom + SCROLL_PADDING * 2,
-                            minWidth: '100%',
-                            minHeight: '100%',
-                            position: 'relative',
-                        }}>
-                            {/* キャンバスをスクロール wrapper 内中央に配置 */}
+                    {psd ? (() => {
+                        const pw = previewRef.current?.clientWidth ?? 0;
+                        const ph = previewRef.current?.clientHeight ?? 0;
+                        const cw = psd.width * zoom;
+                        const ch = psd.height * zoom;
+                        const SB = 8; // スクロールバーの太さ
+
+                        // スクロール可能な仮想空間サイズ（キャンバス + 余白）
+                        const MARGIN = 80;
+                        const virtualW = cw + MARGIN * 2;
+                        const virtualH = ch + MARGIN * 2;
+
+                        // キャンバス左上が仮想空間内でどこにあるか
+                        // ox はキャンバス左上のビューポート座標 → 仮想空間内オフセット = MARGIN - ox
+                        const scrollX = MARGIN - view.ox;
+                        const scrollY = MARGIN - view.oy;
+
+                        // 横スクロールバーのサム
+                        const trackW = pw - SB;
+                        const thumbW = Math.max(20, trackW * (pw / Math.max(virtualW, pw)));
+                        const thumbX = virtualW <= pw ? 0 : (scrollX / (virtualW - pw)) * (trackW - thumbW);
+
+                        // 縦スクロールバーのサム
+                        const trackH = ph - SB;
+                        const thumbH = Math.max(20, trackH * (ph / Math.max(virtualH, ph)));
+                        const thumbY = virtualH <= ph ? 0 : (scrollY / (virtualH - ph)) * (trackH - thumbH);
+
+                        const showSbX = virtualW > pw;
+                        const showSbY = virtualH > ph;
+
+                        return (<>
                             <div
                                 className="canvas-container"
                                 style={{
                                     position: 'absolute',
-                                    left: SCROLL_PADDING,
-                                    top: SCROLL_PADDING,
+                                    left: view.ox,
+                                    top: view.oy,
                                     width: psd.width,
                                     height: psd.height,
                                     transform: `scale(${zoom})`,
                                     transformOrigin: 'top left',
+                                    zIndex: 1,
                                 }}
                             >
                                 <canvas ref={canvasRef} />
                             </div>
-                        </div>
-                    ) : (
+
+                            {/* 横スクロールバー */}
+                            {showSbX && (
+                                <div
+                                    className="preview-sb-track preview-sb-track-x"
+                                    style={{ bottom: showSbY ? SB : 0 }}
+                                    onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        const trackEl = e.currentTarget;
+                                        const startX = e.clientX;
+                                        const startScrollX = scrollX;
+                                        const ratio = (virtualW - pw) / (trackW - thumbW);
+                                        const move = (ev: MouseEvent) => {
+                                            const newScrollX = Math.max(0, Math.min(virtualW - pw,
+                                                startScrollX + (ev.clientX - startX) * ratio));
+                                            setView(v => ({ ...v, ox: MARGIN - newScrollX }));
+                                        };
+                                        const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+                                        window.addEventListener('mousemove', move);
+                                        window.addEventListener('mouseup', up);
+                                    }}
+                                >
+                                    <div className="preview-sb-thumb" style={{ left: thumbX, width: thumbW }} />
+                                </div>
+                            )}
+
+                            {/* 縦スクロールバー */}
+                            {showSbY && (
+                                <div
+                                    className="preview-sb-track preview-sb-track-y"
+                                    style={{ right: showSbX ? SB : 0 }}
+                                    onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        const startY = e.clientY;
+                                        const startScrollY = scrollY;
+                                        const ratio = (virtualH - ph) / (trackH - thumbH);
+                                        const move = (ev: MouseEvent) => {
+                                            const newScrollY = Math.max(0, Math.min(virtualH - ph,
+                                                startScrollY + (ev.clientY - startY) * ratio));
+                                            setView(v => ({ ...v, oy: MARGIN - newScrollY }));
+                                        };
+                                        const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+                                        window.addEventListener('mousemove', move);
+                                        window.addEventListener('mouseup', up);
+                                    }}
+                                >
+                                    <div className="preview-sb-thumb" style={{ top: thumbY, height: thumbH }} />
+                                </div>
+                            )}
+                        </>);
+                    })() : (
                         <div className="placeholder">
                             <Monitor className="placeholder-icon" />
                             <p>Drag and drop or import a PSD file to start</p>

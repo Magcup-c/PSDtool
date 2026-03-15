@@ -1103,9 +1103,9 @@ canvas {
    プレビューパネル スクロールバー対応
 ───────────────────────────────────── */
 
-/* overflow: auto でスクロールバーを有効化 */
+/* transform 方式: overflow hidden + カスタムスクロールバー */
 .preview-panel {
-    overflow: auto !important;
+    overflow: hidden !important;
     cursor: grab;
 }
 
@@ -1113,28 +1113,45 @@ canvas {
     cursor: grabbing;
 }
 
-/* Webkit スクロールバーのスタイリング */
-.preview-panel::-webkit-scrollbar {
-    width: 8px;
+/* ─── カスタムスクロールバー ─── */
+.preview-sb-track {
+    position: absolute;
+    background: transparent;
+    z-index: 10;
+    pointer-events: auto;
+}
+
+.preview-sb-track-x {
+    left: 0;
     height: 8px;
 }
 
-.preview-panel::-webkit-scrollbar-track {
-    background: transparent;
+.preview-sb-track-y {
+    top: 0;
+    width: 8px;
 }
 
-.preview-panel::-webkit-scrollbar-thumb {
+.preview-sb-thumb {
+    position: absolute;
     background: var(--line-mid);
     border-radius: 99px;
     border: 2px solid transparent;
     background-clip: content-box;
+    transition: background 120ms ease;
+    cursor: pointer;
 }
 
-.preview-panel::-webkit-scrollbar-thumb:hover {
+.preview-sb-track-x .preview-sb-thumb {
+    top: 0;
+    height: 100%;
+}
+
+.preview-sb-track-y .preview-sb-thumb {
+    left: 0;
+    width: 100%;
+}
+
+.preview-sb-track:hover .preview-sb-thumb {
     background: var(--fg-3);
     background-clip: content-box;
-}
-
-.preview-panel::-webkit-scrollbar-corner {
-    background: transparent;
 }
