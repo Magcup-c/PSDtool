@@ -1098,3 +1098,43 @@ canvas {
     border-radius: 2px;
     padding: 0 1px;
 }
+
+/* ─────────────────────────────────────
+   プレビューパネル スクロールバー対応
+───────────────────────────────────── */
+
+/* overflow: auto でスクロールバーを有効化 */
+.preview-panel {
+    overflow: auto !important;
+    cursor: grab;
+}
+
+.preview-panel:active {
+    cursor: grabbing;
+}
+
+/* Webkit スクロールバーのスタイリング */
+.preview-panel::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.preview-panel::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.preview-panel::-webkit-scrollbar-thumb {
+    background: var(--line-mid);
+    border-radius: 99px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.preview-panel::-webkit-scrollbar-thumb:hover {
+    background: var(--fg-3);
+    background-clip: content-box;
+}
+
+.preview-panel::-webkit-scrollbar-corner {
+    background: transparent;
+}
