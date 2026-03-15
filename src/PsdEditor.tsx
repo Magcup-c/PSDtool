@@ -1,300 +1,29 @@
-import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readPsd, writePsd, Psd } from 'ag-psd';
 import {
-    FolderOpen, Save, Layers, ChevronDown, ChevronRight,
-    Eye, EyeOff, Image as ImageIcon, Folder as FolderIcon,
-    Monitor, ZoomIn, ZoomOut, Maximize, X, Minus, Square,
-    CheckCircle2, AlertCircle, Download, FlipHorizontal2,
+    FolderOpen, Save, Layers,
+    Image as ImageIcon,
+    Monitor, ZoomIn, ZoomOut, Maximize, X, Minus, Square, Download, FlipHorizontal2,
     FlipVertical2, Asterisk, Pin, Replace, ChevronsDownUp,
-    ChevronsUpDown, Plus, FolderPlus, Trash2, GripVertical, Search,
+    ChevronsUpDown, Plus, FolderPlus, Search,
 } from 'lucide-react';
 import './PsdEditor.css';
 
-// ─────────────────────────────────────────────────
-// ユーティリティ
-// ─────────────────────────────────────────────────
-function getLayersAtPath(children: any[], parentPath: number[]): any[] {
-    let current = children;
-    for (const idx of parentPath) current = current[idx].children;
-    return current;
-}
+import { getLayersAtPath, cacheDataUrls, updateLayerByPath, collectSearchResults, throttle } from './utils/psdUtils';
+import { DropTargetInfo } from './types';
+import { Toast } from './components/Toast';
+import { SearchResultRow } from './components/SearchResultRow';
+import { LayerItem } from './components/LayerItem';
+import { usePsdHistory } from './hooks/usePsdHistory';
+import { useZoomPan } from './hooks/useZoomPan';
 
-// ─────────────────────────────────────────────────
-// 【最適化1】toDataUrl キャッシュ
-// ロード直後に一度だけ変換して layer._dataUrl に保存。
-// 以降の再レンダリングでは文字列を参照するだけ。
-// ─────────────────────────────────────────────────
-function cacheDataUrls(layers: any[]): void {
-    for (const layer of layers) {
-        if (layer.canvas && layer._dataUrl === undefined) {
-            try { layer._dataUrl = layer.canvas.toDataURL(); }
-            catch { layer._dataUrl = null; }
-        }
-        if (layer.children?.length) cacheDataUrls(layer.children);
-    }
-}
-
-// ─────────────────────────────────────────────────
-// 【最適化2】immutable ツリー更新（変更パスのみコピー）
-// 変更されないノードは参照を保持 → memo の === 比較が通る
-// ─────────────────────────────────────────────────
-function updateLayerByPath(psd: Psd, path: number[], update: (layer: any) => any): Psd {
-    const newPsd = { ...psd };
-    if (!newPsd.children) return newPsd;
-    newPsd.children = [...newPsd.children];
-    let current = newPsd.children;
-    const pathCopy = [...path];
-    const lastIdx = pathCopy.pop();
-    if (lastIdx === undefined) return newPsd;
-    for (const idx of pathCopy) {
-        current[idx] = { ...current[idx], children: [...(current[idx].children || [])] };
-        current = current[idx].children!;
-    }
-    current[lastIdx] = update(current[lastIdx]);
-    return newPsd;
-}
-
-// ─────────────────────────────────────────────────
-// Toast
-// ─────────────────────────────────────────────────
-interface ToastProps { message: string; type: 'success' | 'error'; onClose: () => void; }
-const Toast = ({ message, type, onClose }: ToastProps) => {
-    useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
-    return (
-        <div className={`toast-notification ${type}`}>
-            {type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-            <span>{message}</span>
-            <button onClick={onClose} className="toast-close"><X size={14} /></button>
-        </div>
-    );
-};
-
-// ─────────────────────────────────────────────────
-// DropTarget 型
-// ─────────────────────────────────────────────────
-interface DropTargetInfo { path: number[]; position: 'before' | 'after' | 'inside'; }
-
-// ─────────────────────────────────────────────────
-// 検索
-// ─────────────────────────────────────────────────
-interface SearchResult {
-    layer: any; path: number[]; displayName: string;
-    matchStart: number; matchEnd: number;
-}
-function collectSearchResults(layers: any[], query: string, parentPath: number[] = []): SearchResult[] {
-    const results: SearchResult[] = [];
-    const lowerQuery = query.toLowerCase();
-    layers.forEach((layer, idx) => {
-        const rawName = layer.name || '';
-        const displayName = rawName.startsWith('*') || rawName.startsWith('!') ? rawName.slice(1) : rawName;
-        const matchStart = displayName.toLowerCase().indexOf(lowerQuery);
-        if (matchStart !== -1)
-            results.push({ layer, path: [...parentPath, idx], displayName, matchStart, matchEnd: matchStart + lowerQuery.length });
-        if (layer.children?.length)
-            results.push(...collectSearchResults(layer.children, query, [...parentPath, idx]));
-    });
-    return results;
-}
-
-// ─────────────────────────────────────────────────
-// 【最適化3】SearchResultRow: _dataUrl を直接使用
-// ─────────────────────────────────────────────────
-interface SearchResultRowProps { result: SearchResult; onToggle: (path: number[]) => void; }
-const SearchResultRow = memo(({ result, onToggle }: SearchResultRowProps) => {
-    const { layer, path, displayName, matchStart, matchEnd } = result;
-    const hasChildren = !!(layer.children?.length);
-    const depth = path.length - 1;
-    const highlighted = (
-        <span>
-            {displayName.slice(0, matchStart)}
-            <mark className="search-highlight">{displayName.slice(matchStart, matchEnd)}</mark>
-            {displayName.slice(matchEnd)}
-        </span>
-    );
-    return (
-        <div className="layer-item search-result-row" style={{ paddingLeft: 8 + depth * 12 }}>
-            {depth > 0 && <span className="search-depth-hint" title={`depth ${depth}`}>{'›'.repeat(depth)}</span>}
-            <div className="visibility-toggle" onClick={() => onToggle(path)} title="Toggle visibility">
-                {!layer.hidden ? <Eye size={16} className="text-accent" /> : <EyeOff size={16} className="text-muted" />}
-            </div>
-            <div className="layer-preview-thumbnail">
-                {hasChildren
-                    ? <FolderIcon size={16} className="text-muted" fill="currentColor" fillOpacity={0.1} />
-                    : layer._dataUrl
-                        ? <img src={layer._dataUrl} alt="" className="layer-thumbnail-img" />
-                        : <ImageIcon size={16} className="text-muted" />
-                }
-            </div>
-            <span className="search-result-name">{highlighted}</span>
-        </div>
-    );
-});
-
-// ─────────────────────────────────────────────────
-// LayerThumbnail: _dataUrl 文字列を参照するだけ（toDataURL 不要）
-// ─────────────────────────────────────────────────
-const LayerThumbnail = memo(({ dataUrl, hasChildren }: { dataUrl?: string | null; hasChildren: boolean }) => (
-    <div className="layer-preview-thumbnail">
-        {dataUrl
-            ? <img src={dataUrl} alt="" className="layer-thumbnail-img" />
-            : hasChildren
-                ? <FolderIcon size={16} className="text-muted" fill="currentColor" fillOpacity={0.1} />
-                : <ImageIcon size={16} className="text-muted" />
-        }
-    </div>
-));
-
-// ─────────────────────────────────────────────────
-// LayerItem
-// ─────────────────────────────────────────────────
-interface LayerItemProps {
-    layer: any; path: number[]; siblings: any[];
-    radioEnabled: boolean; lockedEnabled: boolean; flipEnabled: boolean;
-    isClosed: boolean; isChildClosed: (k: string) => boolean;
-    onToggleExpand: (key: string) => void;
-    onToggle: (path: number[]) => void;
-    onRename: (path: number[], newName: string) => void;
-    onRadioSelect: (path: number[], siblings: any[]) => void;
-    onDelete: (path: number[]) => void;
-    onDragStart: (e: React.MouseEvent, path: number[]) => void;
-    draggingPath: number[] | null;
-    dropTarget: DropTargetInfo | null;
-    hasFlipSuffix: (name: string) => boolean;
-}
-
-const LayerItem = memo(({
-    layer, path, siblings, radioEnabled, lockedEnabled, flipEnabled,
-    isClosed, isChildClosed, onToggleExpand, onToggle, onRename, onRadioSelect,
-    onDelete, onDragStart, draggingPath, dropTarget, hasFlipSuffix,
-}: LayerItemProps) => {
-    const key = path.join('-');
-    const hasChildren = !!(layer.children?.length);
-    const name = layer.name || '';
-    const isRadio = radioEnabled && name.startsWith('*');
-    const isLocked = lockedEnabled && name.startsWith('!');
-    const displayName = (isRadio || isLocked) ? name.slice(1) : name;
-
-    const isDraggingThis = draggingPath?.join('-') === key;
-    const isDropBefore = dropTarget?.path.join('-') === key && dropTarget.position === 'before';
-    const isDropAfter = dropTarget?.path.join('-') === key && dropTarget.position === 'after';
-    const isDropInside = dropTarget?.path.join('-') === key && dropTarget.position === 'inside';
-
-    const handleVisibilityClick = useCallback(() => {
-        if (isLocked) return;
-        if (isRadio) onRadioSelect(path, siblings); else onToggle(path);
-    }, [isLocked, isRadio, onRadioSelect, onToggle, path, siblings]);
-
-    const handleExpandClick = useCallback(() => onToggleExpand(key), [onToggleExpand, key]);
-
-    const handleRename = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        const prefix = isRadio ? '*' : isLocked ? '!' : '';
-        onRename(path, prefix + e.target.value);
-    }, [isRadio, isLocked, onRename, path]);
-
-    const handleDelete = useCallback((e: React.MouseEvent) => {
-        e.stopPropagation(); onDelete(path);
-    }, [onDelete, path]);
-
-    const handleDragStart = useCallback((e: React.MouseEvent) => {
-        (document.activeElement as HTMLElement)?.blur();
-        onDragStart(e, path);
-    }, [onDragStart, path]);
-
-    return (
-        <li className="layer-node">
-            {isDropBefore && <div className="drop-indicator" />}
-            <div
-                className={['layer-item', isLocked ? 'layer-locked' : '', isRadio ? 'layer-radio' : '',
-                    isDraggingThis ? 'layer-dragging' : '', isDropInside ? 'layer-drop-inside' : ''].filter(Boolean).join(' ')}
-                data-path={key}
-                data-group={hasChildren ? 'true' : 'false'}
-                onMouseDown={(e) => { if ((e.target as HTMLElement).tagName !== 'INPUT') (document.activeElement as HTMLElement)?.blur(); }}
-            >
-                <span className="drag-handle" onMouseDown={handleDragStart} title="Drag to reorder"><GripVertical size={12} /></span>
-                {hasChildren
-                    ? <button className="toggle-expand" onClick={handleExpandClick}>{!isClosed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
-                    : <span className="spacer" />
-                }
-                {!isLocked ? (
-                    <div className="visibility-toggle" onClick={handleVisibilityClick} title={isRadio ? 'Select (radio)' : 'Toggle visibility'}>
-                        {isRadio
-                            ? <div className={`radio-indicator ${!layer.hidden ? 'active' : ''}`} />
-                            : !layer.hidden ? <Eye size={16} className="text-accent" /> : <EyeOff size={16} className="text-muted" />
-                        }
-                    </div>
-                ) : (
-                    <span className="visibility-locked" title="Visibility locked">
-                        <Eye size={16} className="text-accent" style={{ opacity: 0.4 }} />
-                    </span>
-                )}
-                {/* _dataUrl を直接渡す（toDataURL は呼ばない） */}
-                <LayerThumbnail dataUrl={layer._dataUrl} hasChildren={hasChildren} />
-                <input
-                    type="text" className="layer-name-input"
-                    value={displayName} onChange={handleRename}
-                    placeholder={hasChildren ? 'New Group' : 'New Layer'}
-                />
-                <button
-                    className="layer-delete-btn" onClick={handleDelete} title="Delete layer"
-                    onMouseDown={(e) => { e.stopPropagation(); (document.activeElement as HTMLElement)?.blur(); }}
-                >
-                    <Trash2 size={12} />
-                </button>
-            </div>
-            {isDropAfter && <div className="drop-indicator" />}
-            {hasChildren && !isClosed && (
-                <ul className="sub-layers">
-                    {[...(layer.children || [])].reverse().map((child: any, i: number) => {
-                        const originalIndex = (layer.children.length - 1) - i;
-                        const childPath = [...path, originalIndex];
-                        const childKey = childPath.join('-');
-                        if (flipEnabled && hasFlipSuffix(child.name || '')) return null;
-                        return (
-                            <LayerItem
-                                key={childKey} layer={child} path={childPath} siblings={layer.children}
-                                radioEnabled={radioEnabled} lockedEnabled={lockedEnabled} flipEnabled={flipEnabled}
-                                isClosed={isChildClosed(childKey)} isChildClosed={isChildClosed}
-                                onToggleExpand={onToggleExpand} onToggle={onToggle} onRename={onRename}
-                                onRadioSelect={onRadioSelect} onDelete={onDelete} onDragStart={onDragStart}
-                                draggingPath={draggingPath} dropTarget={dropTarget} hasFlipSuffix={hasFlipSuffix}
-                            />
-                        );
-                    })}
-                </ul>
-            )}
-        </li>
-    );
-}, (prev, next) =>
-    // 【最適化2の効果】変更されていないノードは layer の参照が同じ → スキップ
-    prev.layer === next.layer &&
-    prev.isClosed === next.isClosed &&
-    prev.radioEnabled === next.radioEnabled &&
-    prev.lockedEnabled === next.lockedEnabled &&
-    prev.flipEnabled === next.flipEnabled &&
-    prev.draggingPath === next.draggingPath &&
-    prev.dropTarget === next.dropTarget
-);
-
-// ─────────────────────────────────────────────────
-// throttle ユーティリティ
-// ─────────────────────────────────────────────────
-function throttle<T extends (...args: any[]) => void>(fn: T, ms: number): T {
-    let last = 0;
-    return ((...args: any[]) => {
-        const now = Date.now();
-        if (now - last >= ms) { last = now; fn(...args); }
-    }) as T;
-}
-
-// ─────────────────────────────────────────────────
-// PsdEditor
-// ─────────────────────────────────────────────────
 const PsdEditor = () => {
-    const [psd, setPsd] = useState<Psd | null>(null);
+    const { psd, setPsd, psdRef, commitPsd, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
+
     const [isLoading, setIsLoading] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
     const [flipX, setFlipX] = useState(false);
@@ -312,14 +41,13 @@ const PsdEditor = () => {
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const layerScrollRef = useRef<HTMLDivElement>(null);
-    const undoStack = useRef<Psd[]>([]);
-    const redoStack = useRef<Psd[]>([]);
-    const psdRef = useRef<Psd | null>(null);
+    const scrollRef = useRef<HTMLDivElement>(null);
     const dragStateRef = useRef<{ path: number[]; startY: number; moved: boolean } | null>(null);
 
-    // 【最適化3】Canvas再描画をdirtyフラグ + rAFでバッチ処理
     const drawDirtyRef = useRef(false);
     const drawRafRef = useRef<number | null>(null);
+
+    const { zoom, handleZoom, resetZoom, MARGIN } = useZoomPan(psdRef, scrollRef);
 
     const appWindow = getCurrentWindow();
     const handleMinimize = () => appWindow.minimize();
@@ -360,31 +88,6 @@ const PsdEditor = () => {
     const showToast = (message: string, type: 'success' | 'error' = 'success') =>
         setNotification({ message, type });
 
-    useEffect(() => { psdRef.current = psd; }, [psd]);
-
-    const MAX_UNDO = 50;
-    const commitPsd = useCallback((next: Psd) => {
-        const current = psdRef.current;
-        if (!current) return;
-        undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), current];
-        redoStack.current = [];
-        setPsd(next);
-    }, []);
-
-    const handleUndo = useCallback(() => {
-        if (!undoStack.current.length) return;
-        const current = psdRef.current;
-        if (current) redoStack.current = [...redoStack.current, current];
-        setPsd(undoStack.current.pop()!);
-    }, []);
-
-    const handleRedo = useCallback(() => {
-        if (!redoStack.current.length) return;
-        const current = psdRef.current;
-        if (current) undoStack.current = [...undoStack.current, current];
-        setPsd(redoStack.current.pop()!);
-    }, []);
-
     const handleCopyCanvas = useCallback(async () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -402,19 +105,6 @@ const PsdEditor = () => {
         }
     }, []);
 
-    const normalizeRadioGroups = useCallback((layers: any[]): any[] => {
-        const processed = layers.map((layer) =>
-            layer.children?.length > 0 ? { ...layer, children: normalizeRadioGroups(layer.children) } : layer
-        );
-        const radioIndices = processed.map((l, i) => ({ l, i }))
-            .filter(({ l }) => (l.name || '').startsWith('*')).map(({ i }) => i);
-        if (radioIndices.length < 2) return processed;
-        const visibleIdx = radioIndices.find((i) => !processed[i].hidden) ?? radioIndices[0];
-        const normalized = [...processed];
-        radioIndices.forEach((i) => { normalized[i] = { ...normalized[i], hidden: i !== visibleIdx }; });
-        return normalized;
-    }, []);
-
     const loadPsdFromFilePath = useCallback(async (path: string) => {
         setIsLoading(true);
         try {
@@ -422,17 +112,14 @@ const PsdEditor = () => {
             const parsedPsd = readPsd(data, { skipLayerImageData: false, skipCompositeImageData: false });
             if (parsedPsd.children) {
                 parsedPsd.children = normalizeRadioGroups(parsedPsd.children);
-                // 【最適化1】ロード直後に一度だけ toDataURL を実行してキャッシュ
                 cacheDataUrls(parsedPsd.children);
             }
             setPsd(parsedPsd);
-            setZoom(1);
-            centerOnLoadRef.current = true;
         } catch (err) {
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
         }
         setIsLoading(false);
-    }, [normalizeRadioGroups]);
+    }, [normalizeRadioGroups, setPsd]);
 
     useEffect(() => {
         const unlistenPromises = Promise.all([
@@ -446,106 +133,6 @@ const PsdEditor = () => {
         ]);
         return () => { unlistenPromises.then(us => us.forEach(u => u())); };
     }, [loadPsdFromFilePath]);
-
-    // ネイティブスクロール方式
-    // zoom のみ state 管理。パンはブラウザの overflow:scroll に完全委譲。
-    const [zoom, setZoom] = useState(1);
-    const scrollRef = useRef<HTMLDivElement>(null);
-    const centerOnLoadRef = useRef(false);
-    const prevPsdSizeRef = useRef<{ w: number; h: number } | null>(null);
-    const MARGIN = 200;
-
-    // ロード・PSDサイズ変更時にセンタリングフラグ
-    useEffect(() => {
-        if (!psd) return;
-        const size = { w: psd.width, h: psd.height };
-        if (!prevPsdSizeRef.current ||
-            prevPsdSizeRef.current.w !== size.w ||
-            prevPsdSizeRef.current.h !== size.h) {
-            prevPsdSizeRef.current = size;
-            centerOnLoadRef.current = true;
-        }
-    }, [psd]);
-
-    // センタリング
-    useEffect(() => {
-        if (!centerOnLoadRef.current || !psd) return;
-        centerOnLoadRef.current = false;
-        const el = scrollRef.current;
-        if (!el) return;
-        requestAnimationFrame(() => {
-            el.scrollLeft = (psd.width * zoom + MARGIN * 2 - el.clientWidth) / 2;
-            el.scrollTop = (psd.height * zoom + MARGIN * 2 - el.clientHeight) / 2;
-        });
-    }, [psd, zoom]);
-
-    // Ctrl+ホイール → ズーム（カーソル下固定）
-    // パンは overflow:scroll のネイティブスクロールに完全委譲
-    const zoomRef = useRef(zoom);
-    useEffect(() => { zoomRef.current = zoom; }, [zoom]);
-
-    // Ctrl+ホイール → ズームのみ JS で処理
-    // パンは overflow:scroll のネイティブスクロールに完全委譲
-    // （wheelイベントでパンを処理すると OS の軸ロックが発生するため）
-    useEffect(() => {
-        const el = scrollRef.current;
-        if (!el) return;
-        const handleWheel = (e: WheelEvent) => {
-            if (!e.ctrlKey) return; // パンはブラウザに任せる → ここで return するだけ
-            e.preventDefault();
-            if (!psdRef.current) return;
-            const mul = e.deltaMode === 1 ? 16 : 1;
-            const raw = e.deltaY * mul;
-            const factor = 1 - raw * 0.002;
-            const rect = el.getBoundingClientRect();
-            const cursorX = e.clientX - rect.left + el.scrollLeft;
-            const cursorY = e.clientY - rect.top + el.scrollTop;
-            setZoom(prev => {
-                const next = Math.min(5, Math.max(0.1, Math.round(prev * factor * 100) / 100));
-                if (next === prev) return prev;
-                const ratio = next / prev;
-                requestAnimationFrame(() => {
-                    el.scrollLeft = cursorX * ratio - (e.clientX - rect.left);
-                    el.scrollTop = cursorY * ratio - (e.clientY - rect.top);
-                });
-                return next;
-            });
-        };
-        // passive: true にしてブラウザのネイティブスクロールを妨げない
-        // Ctrl+wheel のときだけ preventDefault が必要なので passive: false は必須
-        el.addEventListener('wheel', handleWheel, { passive: false });
-        return () => el.removeEventListener('wheel', handleWheel);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    // マウスドラッグパン（左/中ボタン）
-    useEffect(() => {
-        const el = scrollRef.current;
-        if (!el) return;
-        let dragging = false, lastX = 0, lastY = 0;
-        const onMouseDown = (e: MouseEvent) => {
-            if (e.button !== 0 && e.button !== 1) return;
-            dragging = true; lastX = e.clientX; lastY = e.clientY;
-            el.style.cursor = 'grabbing'; e.preventDefault();
-        };
-        const onMouseMove = (e: MouseEvent) => {
-            if (!dragging) return;
-            el.scrollLeft -= e.clientX - lastX;
-            el.scrollTop -= e.clientY - lastY;
-            lastX = e.clientX; lastY = e.clientY;
-        };
-        const onMouseUp = () => { dragging = false; el.style.cursor = ''; };
-        el.addEventListener('mousedown', onMouseDown);
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp);
-        return () => {
-            el.removeEventListener('mousedown', onMouseDown);
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
-        };
-    }, []);
-
-
 
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
@@ -591,40 +178,10 @@ const PsdEditor = () => {
         } catch (err) { showToast(`Failed to export PNG: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
-    const handleZoom = (delta: number) => {
-        const el = scrollRef.current;
-        setZoom(prev => {
-            const next = Math.max(0.1, Math.min(5, Math.round((prev + delta) * 100) / 100));
-            if (!el || !psdRef.current) return next;
-            const cx = el.scrollLeft + el.clientWidth / 2;
-            const cy = el.scrollTop + el.clientHeight / 2;
-            const ratio = next / prev;
-            requestAnimationFrame(() => {
-                el.scrollLeft = cx * ratio - el.clientWidth / 2;
-                el.scrollTop = cy * ratio - el.clientHeight / 2;
-            });
-            return next;
-        });
-    };
-
-    const resetZoom = () => {
-        const el = scrollRef.current;
-        setZoom(1);
-        if (!el || !psdRef.current) return;
-        const p = psdRef.current;
-        requestAnimationFrame(() => {
-            el.scrollLeft = (p.width + MARGIN * 2 - el.clientWidth) / 2;
-            el.scrollTop = (p.height + MARGIN * 2 - el.clientHeight) / 2;
-        });
-    };
-
-    // ─────────────────────────────────────────────────
-    // レイヤー操作
-    // ─────────────────────────────────────────────────
     const toggleLayerVisibility = useCallback((path: number[]) => {
         if (!psdRef.current) return;
         commitPsd(updateLayerByPath(psdRef.current, path, (l) => ({ ...l, hidden: !l.hidden })));
-    }, [commitPsd]);
+    }, [commitPsd, psdRef]);
 
     const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const renameSessionRef = useRef(false);
@@ -636,51 +193,34 @@ const PsdEditor = () => {
         else { if (renameTimerRef.current) clearTimeout(renameTimerRef.current); setPsd(updated); }
         if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
         renameTimerRef.current = setTimeout(() => { renameTimerRef.current = null; renameSessionRef.current = false; }, 600);
-    }, [commitPsd]);
-
-    const toggleRadioLayer = useCallback((path: number[], siblings: any[]) => {
-        if (!psdRef.current) return;
-        const selectedIdx = path[path.length - 1];
-        const parentPath = path.slice(0, -1);
-        let currentPsd = psdRef.current;
-        siblings.forEach((sibling: any, idx: number) => {
-            if (!(sibling.name || '').startsWith('*')) return;
-            const shouldHide = idx !== selectedIdx;
-            if (sibling.hidden !== shouldHide)
-                currentPsd = updateLayerByPath(currentPsd, [...parentPath, idx], (l) => ({ ...l, hidden: shouldHide }));
-        });
-        if (currentPsd !== psdRef.current) commitPsd(currentPsd);
-    }, [commitPsd]);
+    }, [commitPsd, psdRef, setPsd]);
 
     const handleAddLayer = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
         commitPsd({ ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] });
-    }, [commitPsd]);
+    }, [commitPsd, psdRef]);
 
     const handleAddGroup = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
         commitPsd({ ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] });
-    }, [commitPsd]);
+    }, [commitPsd, psdRef]);
 
     const handleDeleteLayer = useCallback((path: number[]) => {
         if (!psdRef.current) return;
-        const deleteAt = (psd: Psd, path: number[]): Psd => {
-            const newPsd = { ...psd, children: [...(psd.children || [])] };
+        const deleteAt = (p: Psd, pathArgs: number[]): Psd => {
+            const newPsd = { ...p, children: [...(p.children || [])] };
             let arr = newPsd.children;
-            const pathCopy = [...path];
+            const pathCopy = [...pathArgs];
             const lastIdx = pathCopy.pop()!;
             for (const idx of pathCopy) { arr[idx] = { ...arr[idx], children: [...(arr[idx].children || [])] }; arr = arr[idx].children!; }
             arr.splice(lastIdx, 1);
             return newPsd;
         };
         commitPsd(deleteAt(psdRef.current, path));
-    }, [commitPsd]);
+    }, [commitPsd, psdRef]);
 
-    // ─────────────────────────────────────────────────
-    // 【最適化4】ドラッグ: mousemoveをthrottleし、位置キャッシュを使用
-    // ─────────────────────────────────────────────────
     const itemRectsRef = useRef<{ el: HTMLElement; rect: DOMRect; path: number[]; isGroup: boolean }[]>([]);
 
     const cacheItemRects = useCallback(() => {
@@ -738,16 +278,14 @@ const PsdEditor = () => {
             dstArr.splice(insertIdx, 0, srcLayer);
         }
         commitPsd({ ...current, children: newChildren });
-    }, [commitPsd]);
+    }, [commitPsd, psdRef]);
 
     const handleLayerDragStart = useCallback((e: React.MouseEvent, path: number[]) => {
         e.preventDefault(); e.stopPropagation();
         dragStateRef.current = { path, startY: e.clientY, moved: false };
         setDraggingPath(path);
-        // ドラッグ開始時にDOMの位置をキャッシュ（mousemove中はDOMを触らない）
         cacheItemRects();
 
-        // throttle: 32ms≒30fps でドロップターゲット更新
         const throttledMove = throttle((ev: MouseEvent) => {
             if (!dragStateRef.current) return;
             const target = findDropTargetFromCache(ev.clientY);
@@ -782,9 +320,6 @@ const PsdEditor = () => {
         window.addEventListener('mouseup', onMouseUp);
     }, [cacheItemRects, findDropTargetFromCache, applyDrop]);
 
-    // ─────────────────────────────────────────────────
-    // flip ヘルパー
-    // ─────────────────────────────────────────────────
     const getFlipSuffix = useCallback((): string => {
         if (flipX && flipY) return ':flipxy';
         if (flipX) return ':flipx';
@@ -795,10 +330,6 @@ const PsdEditor = () => {
     const getBaseName = useCallback((name: string): string => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
     const hasFlipSuffix = useCallback((name: string): boolean => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
 
-    // ─────────────────────────────────────────────────
-    // 【最適化3】Canvas描画: dirtyフラグ + rAFでバッチ
-    // psd/flip が変わったらフラグを立て、rAFで一度だけ描画
-    // ─────────────────────────────────────────────────
     const drawCanvas = useCallback(() => {
         const canvas = canvasRef.current;
         const currentPsd = psdRef.current;
@@ -844,7 +375,7 @@ const PsdEditor = () => {
         ctx.restore();
 
         drawDirtyRef.current = false;
-    }, [flipX, flipY, flipEnabled, getFlipSuffix, getBaseName, hasFlipSuffix]);
+    }, [flipX, flipY, flipEnabled, getFlipSuffix, getBaseName, hasFlipSuffix, psdRef]);
 
     useEffect(() => {
         if (!psd) return;
@@ -854,12 +385,8 @@ const PsdEditor = () => {
         return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
     }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
 
-    // ─────────────────────────────────────────────────
-    // JSX
-    // ─────────────────────────────────────────────────
     return (
         <div className={`psd-editor theme-${theme} ${isDragging ? 'is-dragging' : ''}`}>
-            {/* タイトルバー */}
             <div className="custom-title-bar" data-tauri-drag-region onMouseDown={(e) => { if (e.button === 0) appWindow.startDragging(); }}>
                 <div className="title-bar-brand" data-tauri-drag-region>
                     <ImageIcon size={14} /><span>PSD STUDIO</span>
@@ -871,7 +398,6 @@ const PsdEditor = () => {
                 </div>
             </div>
 
-            {/* ヘッダー */}
             <header className="editor-header">
                 <div className="brand"><Layers size={20} className="text-accent" /><h1>Workspace</h1></div>
                 <div className="theme-switcher">
@@ -989,8 +515,8 @@ const PsdEditor = () => {
                     ref={scrollRef}
                     style={{
                         overflow: 'scroll',
-                        scrollbarWidth: 'none',       // Firefox
-                        msOverflowStyle: 'none',      // IE/Edge
+                        scrollbarWidth: 'none',
+                        msOverflowStyle: 'none',
                     } as React.CSSProperties}
                 >
                     {psd ? (
