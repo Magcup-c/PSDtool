@@ -918,3 +918,183 @@ canvas {
         transform: rotate(360deg);
     }
 }
+
+/* ─────────────────────────────────────
+   ドラッグハンドル
+───────────────────────────────────── */
+.drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    min-width: 14px;
+    height: 18px;
+    color: var(--fg-3);
+    cursor: grab;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity var(--t);
+}
+
+.layer-item:hover .drag-handle {
+    opacity: 1;
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+/* ─────────────────────────────────────
+   削除ボタン（ホバー時のみ表示）
+───────────────────────────────────── */
+.layer-delete-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px !important;
+    min-width: 18px !important;
+    height: 18px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    border-radius: 3px !important;
+    color: var(--fg-3) !important;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity var(--t), background var(--t), color var(--t) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.layer-item:hover .layer-delete-btn {
+    opacity: 1;
+}
+
+.layer-delete-btn:hover {
+    background: rgba(220, 60, 60, 0.15) !important;
+    border-color: rgba(220, 60, 60, 0.3) !important;
+    color: #e05555 !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* ─────────────────────────────────────
+   ドラッグ中のレイヤー行
+───────────────────────────────────── */
+.layer-dragging {
+    opacity: 0.4;
+}
+
+/* ─────────────────────────────────────
+   ドロップインジケーター（before / after）
+───────────────────────────────────── */
+.drop-indicator {
+    height: 2px;
+    background: var(--accent);
+    border-radius: 99px;
+    margin: 0 8px;
+    pointer-events: none;
+}
+
+/* ─────────────────────────────────────
+   グループ内ドロップ（inside）
+───────────────────────────────────── */
+.layer-drop-inside {
+    outline: 1px solid var(--accent) !important;
+    background: var(--accent-sub) !important;
+}
+
+/* ─────────────────────────────────────
+   検索バー
+───────────────────────────────────── */
+.layer-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+    background: var(--bg-panel);
+}
+
+.layer-search-icon {
+    color: var(--fg-3);
+    flex-shrink: 0;
+}
+
+.layer-search-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--fg);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 300;
+    min-width: 0;
+}
+
+.layer-search-input::placeholder {
+    color: var(--fg-3);
+}
+
+.layer-search-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 3px !important;
+    color: var(--fg-3) !important;
+    flex-shrink: 0;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.layer-search-clear:hover {
+    background: var(--hover) !important;
+    color: var(--fg) !important;
+    transform: none !important;
+}
+
+/* ─────────────────────────────────────
+   検索結果リスト
+───────────────────────────────────── */
+.search-results-list {
+    padding: 3px 0;
+}
+
+.search-result-row {
+    cursor: default;
+    gap: 4px;
+}
+
+.search-depth-hint {
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: -0.05em;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.search-result-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.search-highlight {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-radius: 2px;
+    padding: 0 1px;
+}
