@@ -197,7 +197,6 @@ const LayerItem = memo(({ layer, path, siblings, radioEnabled, lockedEnabled, is
 const PsdEditor = () => {
     const [psd, setPsd] = useState<Psd | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const [zoom, setZoom] = useState(1);
     const [isDragging, setIsDragging] = useState(false);
     const [flipX, setFlipX] = useState(false);
     const [flipY, setFlipY] = useState(false);
@@ -375,7 +374,8 @@ const PsdEditor = () => {
                 parsedPsd.children = normalizeRadioGroups(parsedPsd.children);
             }
             setPsd(parsedPsd);
-            setZoom(1);
+            setView({ zoom: 1, ox: 0, oy: 0 });
+            centerOnLoadRef.current = true;
         } catch (err) {
             console.error('Failed to load PSD:', err);
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -411,6 +411,115 @@ const PsdEditor = () => {
         };
     }, [loadPsdFromFilePath]); // FIX #2
 
+    // zoom と offset を1つの state にまとめる。
+    // ホイール時に zoom と offset を同時に更新しないと
+    // バッチ更新のタイミングで古い値を参照してズレが起きるため。
+    const [view, setView] = useState({ zoom: 1, ox: 0, oy: 0 });
+    const zoom = view.zoom;   // 既存コードとの互換エイリアス
+
+    // PSD ロード時に一度だけ中央にセットするためのフラグ
+    const centerOnLoadRef = useRef(false);
+
+    // PSD が変わったらフラグを立てる（サイズが変わったときのみ）
+    const prevPsdSizeRef = useRef<{ w: number; h: number } | null>(null);
+    useEffect(() => {
+        if (!psd) return;
+        const size = { w: psd.width, h: psd.height };
+        if (
+            !prevPsdSizeRef.current ||
+            prevPsdSizeRef.current.w !== size.w ||
+            prevPsdSizeRef.current.h !== size.h
+        ) {
+            prevPsdSizeRef.current = size;
+            centerOnLoadRef.current = true;
+        }
+    }, [psd]);
+
+    // psd が変わったとき1回だけ中央にセット
+    useEffect(() => {
+        if (!centerOnLoadRef.current || !psd) return;
+        centerOnLoadRef.current = false;
+        const preview = previewRef.current;
+        if (!preview) return;
+        requestAnimationFrame(() => {
+            const pw = preview.clientWidth;
+            const ph = preview.clientHeight;
+            setView(v => ({
+                zoom: v.zoom,
+                ox: (pw - psd.width * v.zoom) / 2,
+                oy: (ph - psd.height * v.zoom) / 2,
+            }));
+        });
+    }, [psd]); // psd が変わったときだけ実行
+
+    // ドラッグによるパン移動
+    useEffect(() => {
+        const preview = previewRef.current;
+        if (!preview) return;
+        let dragging = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        const onMouseDown = (e: MouseEvent) => {
+            // 左ボタン・中ボタンでパン（右クリックは除外）
+            if (e.button !== 0 && e.button !== 1) return;
+            dragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            preview.style.cursor = 'grabbing';
+            e.preventDefault();
+        };
+        const onMouseMove = (e: MouseEvent) => {
+            if (!dragging) return;
+            const dx = e.clientX - lastX;
+            const dy = e.clientY - lastY;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            setView(v => {
+                const preview2 = previewRef.current;
+                if (!preview2 || !psd) return { ...v, ox: v.ox + dx, oy: v.oy + dy };
+                const pw = preview2.clientWidth;
+                const ph = preview2.clientHeight;
+                const cw = psd.width * v.zoom;
+                const ch = psd.height * v.zoom;
+                return {
+                    ...v,
+                    ox: Math.min(pw - MARGIN, Math.max(MARGIN - cw, v.ox + dx)),
+                    oy: Math.min(ph - MARGIN, Math.max(MARGIN - ch, v.oy + dy)),
+                };
+            });
+        };
+        const onMouseUp = () => {
+            dragging = false;
+            preview.style.cursor = '';
+        };
+
+        preview.addEventListener('mousedown', onMouseDown);
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+        return () => {
+            preview.removeEventListener('mousedown', onMouseDown);
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+    }, [psd]);
+
+    // キャンバスが常にビューポートにある程度かかるようオフセットをクランプする。
+    // MARGIN px 分はビューポート内に残るよう制限する。
+    const MARGIN = 80;
+    const clampOffset = useCallback((ox: number, oy: number, z: number) => {
+        const preview = previewRef.current;
+        if (!preview || !psd) return { ox, oy };
+        const pw = preview.clientWidth;
+        const ph = preview.clientHeight;
+        const cw = psd.width * z;
+        const ch = psd.height * z;
+        return {
+            ox: Math.min(pw - MARGIN, Math.max(MARGIN - cw, ox)),
+            oy: Math.min(ph - MARGIN, Math.max(MARGIN - ch, oy)),
+        };
+    }, [psd]);
+
     useEffect(() => {
         const preview = previewRef.current;
         if (!preview) return;
@@ -419,40 +528,38 @@ const PsdEditor = () => {
             if (!e.ctrlKey) return;
             e.preventDefault();
 
-            // ── ズーム倍率を計算 ──
             const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
             const factor = 1 - raw * 0.002;
 
-            setZoom(prev => {
-                const next = Math.min(5, Math.max(0.1,
-                    Math.round(prev * factor * 100) / 100
+            // カーソルの preview 左上からの座標（イベント時点で確定）
+            const rect = preview.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+
+            setView(prev => {
+                const nextZoom = Math.min(5, Math.max(0.1,
+                    Math.round(prev.zoom * factor * 100) / 100
                 ));
-                if (next === prev) return prev;
+                if (nextZoom === prev.zoom) return prev;
 
-                // ── カーソル位置を固定点にしてスクロール補正 ──
-                // preview 左上からのカーソル座標
-                const rect = preview.getBoundingClientRect();
-                const cx = e.clientX - rect.left;
-                const cy = e.clientY - rect.top;
+                // カーソル下のキャンバス座標を固定点にしてオフセット補正
+                // cx = ox + canvasX * zoom  →  canvasX = (cx - ox) / zoom
+                // ズーム後も同じ canvasX がカーソル下に来るように:
+                // cx = newOx + canvasX * nextZoom  →  newOx = cx - canvasX * nextZoom
+                const canvasX = (cx - prev.ox) / prev.zoom;
+                const canvasY = (cy - prev.oy) / prev.zoom;
 
-                // ズーム前のコンテンツ上の座標
-                const contentX = (preview.scrollLeft + cx) / prev;
-                const contentY = (preview.scrollTop + cy) / prev;
+                const rawOx = cx - canvasX * nextZoom;
+                const rawOy = cy - canvasY * nextZoom;
+                const { ox, oy } = clampOffset(rawOx, rawOy, nextZoom);
 
-                // ズーム後に同じコンテンツ座標がカーソル位置に来るようスクロール調整
-                // requestAnimationFrame で DOM 更新後に実行
-                requestAnimationFrame(() => {
-                    preview.scrollLeft = contentX * next - cx;
-                    preview.scrollTop = contentY * next - cy;
-                });
-
-                return next;
+                return { zoom: nextZoom, ox, oy };
             });
         };
 
         preview.addEventListener('wheel', handleWheel, { passive: false });
         return () => preview.removeEventListener('wheel', handleWheel);
-    }, []);
+    }, [clampOffset]);
 
     // Ctrl+Z（アンドゥ）/ Ctrl+Shift+Z・Ctrl+Y（リドゥ）/ Ctrl+C（クリップボードコピー）
     useEffect(() => {
@@ -558,10 +665,31 @@ const PsdEditor = () => {
     };
 
     const handleZoom = (delta: number) => {
-        setZoom(prev => Math.max(0.1, Math.min(5, prev + delta)));
+        const preview = previewRef.current;
+        setView(v => {
+            const nextZoom = Math.max(0.1, Math.min(5, v.zoom + delta));
+            if (!preview) return { ...v, zoom: nextZoom };
+            // プレビューの中心を固定点にする
+            const cx = preview.clientWidth / 2;
+            const cy = preview.clientHeight / 2;
+            const canvasX = (cx - v.ox) / v.zoom;
+            const canvasY = (cy - v.oy) / v.zoom;
+            const rawOx = cx - canvasX * nextZoom;
+            const rawOy = cy - canvasY * nextZoom;
+            const { ox, oy } = clampOffset(rawOx, rawOy, nextZoom);
+            return { zoom: nextZoom, ox, oy };
+        });
     };
 
-    const resetZoom = () => setZoom(1);
+    const resetZoom = () => {
+        const preview = previewRef.current;
+        if (!preview || !psd) { setView(v => ({ ...v, zoom: 1 })); return; }
+        setView({
+            zoom: 1,
+            ox: (preview.clientWidth - psd.width) / 2,
+            oy: (preview.clientHeight - psd.height) / 2,
+        });
+    };
 
     const updateLayerByPath = (psd: Psd, path: number[], update: (layer: any) => any): Psd => {
         const newPsd = { ...psd };
@@ -738,28 +866,6 @@ const PsdEditor = () => {
         }
     }, [psd, flipX, flipY, flipEnabled]);
 
-    // PSD 読み込み直後（zoom リセット後）にキャンバスをプレビュー中央へスクロールする
-    const prevPsdRef = useRef<Psd | null>(null);
-    useEffect(() => {
-        // psd が新しくロードされたとき（前回と異なるオブジェクト）のみ実行
-        if (!psd || psd === prevPsdRef.current) return;
-        prevPsdRef.current = psd;
-
-        const preview = previewRef.current;
-        if (!preview) return;
-
-        // DOM に反映されてからスクロール量を計算する
-        requestAnimationFrame(() => {
-            const cw = psd.width * zoom;   // canvas の実表示サイズ
-            const ch = psd.height * zoom;
-            const pw = preview.clientWidth;
-            const ph = preview.clientHeight;
-            // コンテンツ全体（padding 込み）の中央にキャンバス中心が来るように
-            preview.scrollLeft = Math.max(0, (cw - pw) / 2);
-            preview.scrollTop = Math.max(0, (ch - ph) / 2);
-        });
-    }, [psd, zoom]);
-
     return (
         <div className={`psd-editor theme-${theme} ${isDragging ? 'is-dragging' : ''}`}>
             <div
@@ -933,34 +1039,27 @@ const PsdEditor = () => {
                 </aside>
 
                 <section className="preview-panel" ref={previewRef as React.RefObject<HTMLElement>}>
-                    <div className="viewport-area">
-                        {psd ? (
-                            <div
-                                className="zoom-container"
-                                style={{
-                                    width: psd.width * zoom,
-                                    height: psd.height * zoom,
-                                }}
-                            >
-                                <div
-                                    className="canvas-container"
-                                    style={{
-                                        width: psd.width,
-                                        height: psd.height,
-                                        transform: `scale(${zoom})`,
-                                        transformOrigin: 'top left',
-                                    }}
-                                >
-                                    <canvas ref={canvasRef} />
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="placeholder">
-                                <Monitor className="placeholder-icon" />
-                                <p>Drag and drop or import a PSD file to start</p>
-                            </div>
-                        )}
-                    </div>
+                    {psd ? (
+                        <div
+                            className="canvas-container"
+                            style={{
+                                position: 'absolute',
+                                left: view.ox,
+                                top: view.oy,
+                                width: psd.width,
+                                height: psd.height,
+                                transform: `scale(${zoom})`,
+                                transformOrigin: 'top left',
+                            }}
+                        >
+                            <canvas ref={canvasRef} />
+                        </div>
+                    ) : (
+                        <div className="placeholder">
+                            <Monitor className="placeholder-icon" />
+                            <p>Drag and drop or import a PSD file to start</p>
+                        </div>
+                    )}
                 </section>
             </div>
 

@@ -687,10 +687,16 @@ button:active {
 .preview-panel {
     flex: 1;
     background: var(--bg);
-    overflow: auto;
+    overflow: hidden;
     position: relative;
+    cursor: grab;
 }
 
+.preview-panel:active {
+    cursor: grabbing;
+}
+
+/* dot grid */
 .preview-panel::after {
     content: '';
     position: absolute;
@@ -715,23 +721,6 @@ button:active {
     border-radius: 99px;
 }
 
-.viewport-area {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 100%;
-    min-height: 100%;
-    padding: 120px;
-    box-sizing: border-box;
-}
-
-.zoom-container {
-    position: relative;
-    flex-shrink: 0;
-    z-index: 1;
-    transition: width 180ms cubic-bezier(.4, 0, .2, 1), height 180ms cubic-bezier(.4, 0, .2, 1);
-}
-
 .canvas-container {
     outline: 1px solid var(--line-mid);
     border-radius: 2px;
@@ -747,6 +736,7 @@ button:active {
     flex-shrink: 0;
     overflow: hidden;
     transition: none;
+    z-index: 1;
 }
 
 .theme-black .canvas-container,
