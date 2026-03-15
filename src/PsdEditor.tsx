@@ -416,17 +416,38 @@ const PsdEditor = () => {
         if (!preview) return;
 
         const handleWheel = (e: WheelEvent) => {
-            if (e.ctrlKey) {
-                e.preventDefault();
-                // deltaY の大きさに比例させる（トラックパッド・マウス両対応）
-                // deltaMode=1 はライン単位なので px 換算する
-                const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-                // 感度係数: 100px スクロールで約 20% ズーム変化
-                const factor = 1 - raw * 0.002;
-                setZoom(prev => Math.min(5, Math.max(0.1,
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+
+            // ── ズーム倍率を計算 ──
+            const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+            const factor = 1 - raw * 0.002;
+
+            setZoom(prev => {
+                const next = Math.min(5, Math.max(0.1,
                     Math.round(prev * factor * 100) / 100
-                )));
-            }
+                ));
+                if (next === prev) return prev;
+
+                // ── カーソル位置を固定点にしてスクロール補正 ──
+                // preview 左上からのカーソル座標
+                const rect = preview.getBoundingClientRect();
+                const cx = e.clientX - rect.left;
+                const cy = e.clientY - rect.top;
+
+                // ズーム前のコンテンツ上の座標
+                const contentX = (preview.scrollLeft + cx) / prev;
+                const contentY = (preview.scrollTop + cy) / prev;
+
+                // ズーム後に同じコンテンツ座標がカーソル位置に来るようスクロール調整
+                // requestAnimationFrame で DOM 更新後に実行
+                requestAnimationFrame(() => {
+                    preview.scrollLeft = contentX * next - cx;
+                    preview.scrollTop = contentY * next - cy;
+                });
+
+                return next;
+            });
         };
 
         preview.addEventListener('wheel', handleWheel, { passive: false });
@@ -717,6 +738,28 @@ const PsdEditor = () => {
         }
     }, [psd, flipX, flipY, flipEnabled]);
 
+    // PSD 読み込み直後（zoom リセット後）にキャンバスをプレビュー中央へスクロールする
+    const prevPsdRef = useRef<Psd | null>(null);
+    useEffect(() => {
+        // psd が新しくロードされたとき（前回と異なるオブジェクト）のみ実行
+        if (!psd || psd === prevPsdRef.current) return;
+        prevPsdRef.current = psd;
+
+        const preview = previewRef.current;
+        if (!preview) return;
+
+        // DOM に反映されてからスクロール量を計算する
+        requestAnimationFrame(() => {
+            const cw = psd.width * zoom;   // canvas の実表示サイズ
+            const ch = psd.height * zoom;
+            const pw = preview.clientWidth;
+            const ph = preview.clientHeight;
+            // コンテンツ全体（padding 込み）の中央にキャンバス中心が来るように
+            preview.scrollLeft = Math.max(0, (cw - pw) / 2);
+            preview.scrollTop = Math.max(0, (ch - ph) / 2);
+        });
+    }, [psd, zoom]);
+
     return (
         <div className={`psd-editor theme-${theme} ${isDragging ? 'is-dragging' : ''}`}>
             <div
@@ -905,7 +948,7 @@ const PsdEditor = () => {
                                         width: psd.width,
                                         height: psd.height,
                                         transform: `scale(${zoom})`,
-                                        transformOrigin: '0 0',
+                                        transformOrigin: 'top left',
                                     }}
                                 >
                                     <canvas ref={canvasRef} />

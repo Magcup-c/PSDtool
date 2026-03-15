@@ -721,7 +721,7 @@ button:active {
     justify-content: center;
     min-width: 100%;
     min-height: 100%;
-    padding: 72px;
+    padding: 120px;
     box-sizing: border-box;
 }
 
@@ -746,7 +746,7 @@ button:active {
     position: relative;
     flex-shrink: 0;
     overflow: hidden;
-    transition: transform 180ms cubic-bezier(.4, 0, .2, 1);
+    transition: none;
 }
 
 .theme-black .canvas-container,
