@@ -40,6 +40,7 @@ const PsdEditor = () => {
     const searchInputRef = useRef<HTMLInputElement>(null);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const canvasContainerRef = useRef<HTMLDivElement>(null);
     const layerScrollRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const dragStateRef = useRef<{ path: number[]; startY: number; moved: boolean } | null>(null);
@@ -47,7 +48,26 @@ const PsdEditor = () => {
     const drawDirtyRef = useRef(false);
     const drawRafRef = useRef<number | null>(null);
 
-    const { zoom, handleZoom, resetZoom, MARGIN } = useZoomPan(psdRef, scrollRef);
+    const { zoom, handleZoom, resetZoom, centerPsd, MARGIN, SCROLL_AREA } = useZoomPan(psdRef, scrollRef, canvasContainerRef);
+
+    // ── psd がセットされたらスクロール領域が DOM に描画された後にセンタリング ──
+    // requestAnimationFrame を2重にすることで、
+    // React の再レンダリング → ブラウザのレイアウト計算 → センタリング
+    // の順序を確実に保証する。
+    const isFirstLoadRef = useRef(true);
+    useEffect(() => {
+        if (!psd) return;
+        if (!isFirstLoadRef.current) return; // 2回目以降（レイヤー操作等）は不要
+        isFirstLoadRef.current = false;
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                centerPsd();
+            });
+        });
+    }, [psd, centerPsd]);
+
+    // 新しいファイルを開いた時にフラグをリセット
+    const prevPsdIdRef = useRef<number>(0);
 
     const appWindow = getCurrentWindow();
     const handleMinimize = () => appWindow.minimize();
@@ -107,6 +127,8 @@ const PsdEditor = () => {
 
     const loadPsdFromFilePath = useCallback(async (path: string) => {
         setIsLoading(true);
+        // 新ファイルロード時はセンタリングフラグをリセット
+        isFirstLoadRef.current = true;
         try {
             const data = await readFile(path);
             const parsedPsd = readPsd(data, { skipLayerImageData: false, skipCompositeImageData: false });
@@ -115,6 +137,7 @@ const PsdEditor = () => {
                 cacheDataUrls(parsedPsd.children);
             }
             setPsd(parsedPsd);
+            // センタリングは上の useEffect（psd 変化監視）で行う
         } catch (err) {
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
         }
@@ -164,7 +187,6 @@ const PsdEditor = () => {
         } catch (err) { showToast(`Failed to save file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
-    // [FIX] Bug #11: atob+手動ループを canvas.toBlob() ベースに置き換え
     const handleExportPng = async () => {
         if (!canvasRef.current || !psd) return;
         try {
@@ -190,30 +212,17 @@ const PsdEditor = () => {
         commitPsd(updateLayerByPath(psdRef.current, path, (l) => ({ ...l, hidden: !l.hidden })));
     }, [commitPsd, psdRef]);
 
-    // [FIX] Bug #3: rename 中の変更をすべて undo に記録する。
-    // 旧実装: セッション中は setPsd で直接書き換えるため最初の1打鍵分しか undo に残らない。
-    // 新実装:
-    //   - セッション開始時に変更前のスナップショットを pushSnapshot で undo に積む（1回だけ）
-    //   - セッション中は setPsd で表示のみ更新（undo スタックは触らない）
-    //   - 600ms 無操作でセッション終了 → 次の操作で新規エントリが積まれる
-    // これにより Ctrl+Z で「リネーム開始前の状態」に一発で戻れる。
     const renameSessionRef = useRef(false);
     const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const renameLayer = useCallback((path: number[], newName: string) => {
         if (!psdRef.current) return;
         const updated = updateLayerByPath(psdRef.current, path, (l) => ({ ...l, name: newName }));
-
         if (!renameSessionRef.current) {
-            // セッション開始: 変更前のスナップショットを undo に積む
             renameSessionRef.current = true;
             pushSnapshot(psdRef.current);
         }
-
-        // 表示のみ更新（undo スタックは触らない）
         setPsd(updated);
-
-        // 600ms 無操作でセッション終了
         if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
         renameTimerRef.current = setTimeout(() => {
             renameTimerRef.current = null;
@@ -224,7 +233,6 @@ const PsdEditor = () => {
     const handleAddLayer = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
-        // [FIX] Bug #4: 新規レイヤー追加後に cacheDataUrls を実行してサムネイルを生成
         const newPsd = { ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] };
         if (newPsd.children) cacheDataUrls(newPsd.children);
         commitPsd(newPsd);
@@ -283,9 +291,6 @@ const PsdEditor = () => {
         return best ? { path: best.path, position: best.position } : null;
     }, []);
 
-    // [FIX] Bug #2: before/after の挿入インデックスが逆転していた問題を修正。
-    // 旧: 'before' のとき insertIdx++ → 1つ後ろに挿入されてしまう
-    // 新: 'after' のとき insertIdx++ が正しい（after = その要素の後ろ）
     const applyDrop = useCallback((srcPath: number[], dst: DropTargetInfo) => {
         const current = psdRef.current;
         if (!current?.children) return;
@@ -308,15 +313,12 @@ const PsdEditor = () => {
         } else {
             const dstArr = dstParentPath.length === 0 ? newChildren : getLayersAtPath(newChildren, dstParentPath);
             let insertIdx = dstPath[dstPath.length - 1];
-            // [FIX] 'after' のとき +1 して要素の後ろに挿入（旧コードは 'before' で +1 していた）
             if (dst.position === 'after') insertIdx++;
             dstArr.splice(insertIdx, 0, srcLayer);
         }
         commitPsd({ ...current, children: newChildren });
     }, [commitPsd, psdRef]);
 
-    // [FIX] Bug #6: ドラッグ中にコンポーネントがアンマウントされた場合の
-    // mousemove / mouseup リスナーリークを防ぐため、クリーンアップ関数を返す形に変更。
     const handleLayerDragStart = useCallback((e: React.MouseEvent, path: number[]) => {
         e.preventDefault(); e.stopPropagation();
         dragStateRef.current = { path, startY: e.clientY, moved: false };
@@ -361,8 +363,6 @@ const PsdEditor = () => {
 
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
-
-        // コンポーネントアンマウント時にもリスナーを確実に解除
         return cleanup;
     }, [cacheItemRects, findDropTargetFromCache, applyDrop]);
 
@@ -387,7 +387,6 @@ const PsdEditor = () => {
         canvas.height = currentPsd.height;
         ctx.clearRect(0, 0, currentPsd.width, currentPsd.height);
 
-        // [FIX] Bug #9: flipX/flipY を useCallback の依存から取得し stale closure を防ぐ
         const currentFlipX = flipX, currentFlipY = flipY;
         const flipSuffix = flipEnabled ? getFlipSuffix() : '';
 
@@ -517,7 +516,19 @@ const PsdEditor = () => {
                     )}
 
                     <div className="layer-scroll" ref={layerScrollRef}>
-                        {psd && psd.children ? (
+                        {isLoading ? (
+                            // ── ローディング中：シマーアニメーション ──
+                            <div className="layer-loading">
+                                {Array.from({ length: 8 }).map((_, i) => (
+                                    <div key={i} className="layer-shimmer-row" style={{ animationDelay: `${i * 60}ms` }}>
+                                        <div className="shimmer-icon" />
+                                        <div className="shimmer-icon" />
+                                        <div className="shimmer-thumb" />
+                                        <div className="shimmer-text" style={{ width: `${50 + (i * 37) % 35}%` }} />
+                                    </div>
+                                ))}
+                            </div>
+                        ) : psd && psd.children ? (
                             searchResults ? (
                                 searchResults.length > 0 ? (
                                     <div className="search-results-list">
@@ -551,7 +562,7 @@ const PsdEditor = () => {
                             )
                         ) : (
                             <div className="empty-state">
-                                <p>{isLoading ? 'Analyzing workspace...' : 'Drop a PSD file here'}</p>
+                                <p>Drop a PSD file here</p>
                             </div>
                         )}
                     </div>
@@ -566,15 +577,25 @@ const PsdEditor = () => {
                         msOverflowStyle: 'none',
                     } as React.CSSProperties}
                 >
-                    {psd ? (
-                        <div className="preview-scroll-inner" style={{
-                            width: psd.width * zoom + MARGIN * 2,
-                            height: psd.height * zoom + MARGIN * 2,
-                            position: 'relative',
-                            minWidth: '100%',
-                            minHeight: '100%',
-                        }}>
+                    {isLoading ? (
+                        // ── ローディング中：プレビューエリアのスピナー ──
+                        <div className="preview-loading">
+                            <div className="preview-loading-inner">
+                                <div className="loading-spinner" />
+                                <p className="loading-label">Analyzing workspace…</p>
+                            </div>
+                        </div>
+                    ) : psd ? (
+                        <div
+                            className="preview-scroll-inner"
+                            style={{
+                                width: SCROLL_AREA,
+                                height: SCROLL_AREA,
+                                position: 'relative',
+                            }}
+                        >
                             <div
+                                ref={canvasContainerRef}
                                 className="canvas-container"
                                 style={{
                                     position: 'absolute',
