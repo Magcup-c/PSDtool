@@ -14,12 +14,22 @@ export function usePsdHistory(initialPsd: Psd | null) {
 
     const MAX_UNDO = 50;
 
+    // 通常の操作: 現在の状態を undo に積んで next をセットする
     const commitPsd = useCallback((next: Psd) => {
         const current = psdRef.current;
         if (!current) return;
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), current];
         redoStack.current = [];
         setPsd(next);
+    }, []);
+
+    // [FIX] Bug #3: rename 用。
+    // 「スナップショットを undo に積む」だけ行い setPsd は呼ばない。
+    // renameLayer 側が setPsd(updated) を別途呼ぶことで
+    // "undo に積む操作" と "表示更新" を分離できる。
+    const pushSnapshot = useCallback((snapshot: Psd) => {
+        undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), snapshot];
+        redoStack.current = [];
     }, []);
 
     const handleUndo = useCallback(() => {
@@ -68,6 +78,7 @@ export function usePsdHistory(initialPsd: Psd | null) {
         setPsd,
         psdRef,
         commitPsd,
+        pushSnapshot,   // rename 用: undo に積むだけ、setPsd は呼ばない
         handleUndo,
         handleRedo,
         normalizeRadioGroups,

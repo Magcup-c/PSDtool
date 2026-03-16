@@ -17,6 +17,18 @@ export function cacheDataUrls(layers: any[]): void {
     }
 }
 
+// [FIX] Bug #4: commitPsd / updateLayerByPath 後にサムネイルが更新されない問題を解消。
+// 単一レイヤーに対して _dataUrl を再生成するヘルパー。
+// updateLayerByPath でシャローコピーされた後のレイヤーに対して呼ぶ。
+export function refreshLayerThumb(layer: any): any {
+    if (!layer.canvas) return layer;
+    try {
+        return { ...layer, _dataUrl: layer.canvas.toDataURL() };
+    } catch {
+        return { ...layer, _dataUrl: null };
+    }
+}
+
 export function updateLayerByPath(psd: Psd, path: number[], update: (layer: any) => any): Psd {
     const newPsd = { ...psd };
     if (!newPsd.children) return newPsd;

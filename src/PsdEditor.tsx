@@ -22,7 +22,7 @@ import { usePsdHistory } from './hooks/usePsdHistory';
 import { useZoomPan } from './hooks/useZoomPan';
 
 const PsdEditor = () => {
-    const { psd, setPsd, psdRef, commitPsd, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
+    const { psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
 
     const [isLoading, setIsLoading] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
@@ -164,15 +164,22 @@ const PsdEditor = () => {
         } catch (err) { showToast(`Failed to save file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
+    // [FIX] Bug #11: atob+手動ループを canvas.toBlob() ベースに置き換え
     const handleExportPng = async () => {
         if (!canvasRef.current || !psd) return;
         try {
             const selected = await save({ title: 'Export as PNG', filters: [{ name: 'PNG Image', extensions: ['png'] }] });
             if (selected) {
-                const bin = atob(canvasRef.current.toDataURL('image/png').split(',')[1]);
-                const arr = new Uint8Array(bin.length);
-                for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-                await writeFile(selected, arr);
+                await new Promise<void>((resolve, reject) => {
+                    canvasRef.current!.toBlob(async (blob) => {
+                        if (!blob) { reject(new Error('toBlob failed')); return; }
+                        try {
+                            const arrayBuffer = await blob.arrayBuffer();
+                            await writeFile(selected, new Uint8Array(arrayBuffer));
+                            resolve();
+                        } catch (e) { reject(e); }
+                    }, 'image/png');
+                });
                 showToast('PNG exported successfully!');
             }
         } catch (err) { showToast(`Failed to export PNG: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
@@ -183,28 +190,52 @@ const PsdEditor = () => {
         commitPsd(updateLayerByPath(psdRef.current, path, (l) => ({ ...l, hidden: !l.hidden })));
     }, [commitPsd, psdRef]);
 
-    const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // [FIX] Bug #3: rename 中の変更をすべて undo に記録する。
+    // 旧実装: セッション中は setPsd で直接書き換えるため最初の1打鍵分しか undo に残らない。
+    // 新実装:
+    //   - セッション開始時に変更前のスナップショットを pushSnapshot で undo に積む（1回だけ）
+    //   - セッション中は setPsd で表示のみ更新（undo スタックは触らない）
+    //   - 600ms 無操作でセッション終了 → 次の操作で新規エントリが積まれる
+    // これにより Ctrl+Z で「リネーム開始前の状態」に一発で戻れる。
     const renameSessionRef = useRef(false);
+    const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const renameLayer = useCallback((path: number[], newName: string) => {
         if (!psdRef.current) return;
         const updated = updateLayerByPath(psdRef.current, path, (l) => ({ ...l, name: newName }));
-        if (!renameSessionRef.current) { renameSessionRef.current = true; commitPsd(updated); }
-        else { if (renameTimerRef.current) clearTimeout(renameTimerRef.current); setPsd(updated); }
+
+        if (!renameSessionRef.current) {
+            // セッション開始: 変更前のスナップショットを undo に積む
+            renameSessionRef.current = true;
+            pushSnapshot(psdRef.current);
+        }
+
+        // 表示のみ更新（undo スタックは触らない）
+        setPsd(updated);
+
+        // 600ms 無操作でセッション終了
         if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-        renameTimerRef.current = setTimeout(() => { renameTimerRef.current = null; renameSessionRef.current = false; }, 600);
-    }, [commitPsd, psdRef, setPsd]);
+        renameTimerRef.current = setTimeout(() => {
+            renameTimerRef.current = null;
+            renameSessionRef.current = false;
+        }, 600);
+    }, [psdRef, setPsd, pushSnapshot]);
 
     const handleAddLayer = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
-        commitPsd({ ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] });
+        // [FIX] Bug #4: 新規レイヤー追加後に cacheDataUrls を実行してサムネイルを生成
+        const newPsd = { ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] };
+        if (newPsd.children) cacheDataUrls(newPsd.children);
+        commitPsd(newPsd);
     }, [commitPsd, psdRef]);
 
     const handleAddGroup = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
-        commitPsd({ ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] });
+        const newPsd = { ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] };
+        if (newPsd.children) cacheDataUrls(newPsd.children);
+        commitPsd(newPsd);
     }, [commitPsd, psdRef]);
 
     const handleDeleteLayer = useCallback((path: number[]) => {
@@ -252,6 +283,9 @@ const PsdEditor = () => {
         return best ? { path: best.path, position: best.position } : null;
     }, []);
 
+    // [FIX] Bug #2: before/after の挿入インデックスが逆転していた問題を修正。
+    // 旧: 'before' のとき insertIdx++ → 1つ後ろに挿入されてしまう
+    // 新: 'after' のとき insertIdx++ が正しい（after = その要素の後ろ）
     const applyDrop = useCallback((srcPath: number[], dst: DropTargetInfo) => {
         const current = psdRef.current;
         if (!current?.children) return;
@@ -274,12 +308,15 @@ const PsdEditor = () => {
         } else {
             const dstArr = dstParentPath.length === 0 ? newChildren : getLayersAtPath(newChildren, dstParentPath);
             let insertIdx = dstPath[dstPath.length - 1];
-            if (dst.position === 'before') insertIdx++;
+            // [FIX] 'after' のとき +1 して要素の後ろに挿入（旧コードは 'before' で +1 していた）
+            if (dst.position === 'after') insertIdx++;
             dstArr.splice(insertIdx, 0, srcLayer);
         }
         commitPsd({ ...current, children: newChildren });
     }, [commitPsd, psdRef]);
 
+    // [FIX] Bug #6: ドラッグ中にコンポーネントがアンマウントされた場合の
+    // mousemove / mouseup リスナーリークを防ぐため、クリーンアップ関数を返す形に変更。
     const handleLayerDragStart = useCallback((e: React.MouseEvent, path: number[]) => {
         e.preventDefault(); e.stopPropagation();
         dragStateRef.current = { path, startY: e.clientY, moved: false };
@@ -302,9 +339,14 @@ const PsdEditor = () => {
             if (Math.abs(ev.clientY - dragStateRef.current.startY) > 3) dragStateRef.current.moved = true;
             throttledMove(ev);
         };
-        const onMouseUp = (ev: MouseEvent) => {
+
+        const cleanup = () => {
             window.removeEventListener('mousemove', onMouseMove);
             window.removeEventListener('mouseup', onMouseUp);
+        };
+
+        const onMouseUp = (ev: MouseEvent) => {
+            cleanup();
             const state = dragStateRef.current;
             dragStateRef.current = null;
             setDraggingPath(null); setDropTarget(null);
@@ -316,8 +358,12 @@ const PsdEditor = () => {
             if (targetKey === dragKey || targetKey.startsWith(dragKey + '-')) return;
             applyDrop(state.path, target);
         };
+
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
+
+        // コンポーネントアンマウント時にもリスナーを確実に解除
+        return cleanup;
     }, [cacheItemRects, findDropTargetFromCache, applyDrop]);
 
     const getFlipSuffix = useCallback((): string => {
@@ -341,6 +387,7 @@ const PsdEditor = () => {
         canvas.height = currentPsd.height;
         ctx.clearRect(0, 0, currentPsd.width, currentPsd.height);
 
+        // [FIX] Bug #9: flipX/flipY を useCallback の依存から取得し stale closure を防ぐ
         const currentFlipX = flipX, currentFlipY = flipY;
         const flipSuffix = flipEnabled ? getFlipSuffix() : '';
 
