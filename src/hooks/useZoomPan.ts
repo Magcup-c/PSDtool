@@ -75,14 +75,25 @@ export function useZoomPan(
     // ─── ホイールズーム ───────────────────────────────────────────────────
     useEffect(() => {
         const el = scrollRef.current;
+        console.log('scrollRef.current:', el);
         if (!el) return;
 
         const handleWheel = (e: WheelEvent) => {
+            console.log('wheel', { ctrlKey: e.ctrlKey, deltaY: e.deltaY, deltaMode: e.deltaMode });
             if (!e.ctrlKey) return;
             e.preventDefault();
 
-            const mul = e.deltaMode === 1 ? 16 : 1;
-            const factor = 1 - e.deltaY * mul * 0.002;
+            // deltaMode: 0=pixel, 1=line, 2=page
+            let delta = e.deltaY;
+            if (e.deltaMode === 1) delta *= 16;   // line → pixel 換算
+            if (e.deltaMode === 2) delta *= 400;  // page → pixel 換算
+
+            // |delta| が小さい → トラックパッドのピンチ（高頻度・小刻み）
+            // |delta| が大きい → マウスホイール（低頻度・大きい値）
+            const isTrackpad = Math.abs(delta) < 20;
+            const sensitivity = isTrackpad ? 0.008 : 0.002;
+
+            const factor = 1 - delta * sensitivity;
 
             const zoomOld = zoomRef.current;
             const zoomNew = Math.min(5, Math.max(0.1, Math.round(zoomOld * factor * 100) / 100));
