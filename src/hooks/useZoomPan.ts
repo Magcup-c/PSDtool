@@ -74,99 +74,47 @@ export function useZoomPan(
 
     // ─── ホイールズーム ───────────────────────────────────────────────────
     useEffect(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+
         const normalizeDeltaToPixels = (e: WheelEvent, value: number) => {
             if (e.deltaMode === 1) return value * 16; // line -> pixel
             if (e.deltaMode === 2) return value * 400; // page -> pixel
             return value;
         };
 
-        const getWheelDeltas = (e: WheelEvent) => {
-            let deltaX = e.deltaX;
-            let deltaY = e.deltaY;
-
-            // Shift+wheel は横スクロール扱い（マウスホイール互換）
-            if (deltaX === 0 && deltaY !== 0 && e.shiftKey) {
-                deltaX = deltaY;
-                deltaY = 0;
-            }
-
-            deltaX = normalizeDeltaToPixels(e, deltaX);
-            deltaY = normalizeDeltaToPixels(e, deltaY);
-
-            // 一部環境の軸ロック対策: 非標準 wheelDeltaX/Y をフォールバック利用
-            if (deltaX === 0 || deltaY === 0) {
-                const anyEvent = e as WheelEvent & {
-                    wheelDeltaX?: number;
-                    wheelDeltaY?: number;
-                    wheelDelta?: number;
-                };
-                const wheelDeltaX = typeof anyEvent.wheelDeltaX === 'number' ? -anyEvent.wheelDeltaX : 0;
-                const wheelDeltaY = typeof anyEvent.wheelDeltaY === 'number'
-                    ? -anyEvent.wheelDeltaY
-                    : (typeof anyEvent.wheelDelta === 'number' ? -anyEvent.wheelDelta : 0);
-
-                if (deltaX === 0 && wheelDeltaX !== 0) deltaX = wheelDeltaX;
-                if (deltaY === 0 && wheelDeltaY !== 0) deltaY = wheelDeltaY;
-            }
-
-            return { deltaX, deltaY };
-        };
-
         const handleWheel = (e: WheelEvent) => {
-            const el = scrollRef.current;
-            if (!el) return;
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+
+            const delta = normalizeDeltaToPixels(e, e.deltaY);
+
+            // |delta| が小さい → トラックパッドのピンチ（高頻度・小刻み）
+            // |delta| が大きい → マウスホイール（低頻度・大きい値）
+            const isTrackpad = Math.abs(delta) < 20;
+            const sensitivity = isTrackpad ? 0.008 : 0.002;
+
+            const factor = 1 - delta * sensitivity;
+
+            const zoomOld = zoomRef.current;
+            const zoomNew = Math.min(5, Math.max(0.1, Math.round(zoomOld * factor * 100) / 100));
+            if (zoomNew === zoomOld) return;
 
             const rect = el.getBoundingClientRect();
-            const withinView = e.clientX >= rect.left
-                && e.clientX <= rect.right
-                && e.clientY >= rect.top
-                && e.clientY <= rect.bottom;
+            const cursorViewX = e.clientX - rect.left;
+            const cursorViewY = e.clientY - rect.top;
 
-            // target が期待要素でない環境でも、ポインタ位置がプレビュー上なら処理する
-            const target = e.target;
-            const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
-            const isInsideByTarget = target instanceof Node && el.contains(target);
-            const isInsideByPath = path.includes(el);
-            if (!withinView && !isInsideByTarget && !isInsideByPath) return;
+            const scrollLeftNew = (el.scrollLeft + cursorViewX - MARGIN) * (zoomNew / zoomOld) + MARGIN - cursorViewX;
+            const scrollTopNew = (el.scrollTop + cursorViewY - MARGIN) * (zoomNew / zoomOld) + MARGIN - cursorViewY;
 
-            if (e.ctrlKey || e.metaKey) {
-                e.preventDefault();
-
-                const delta = normalizeDeltaToPixels(e, e.deltaY);
-
-                // |delta| が小さい → トラックパッドのピンチ（高頻度・小刻み）
-                // |delta| が大きい → マウスホイール（低頻度・大きい値）
-                const isTrackpad = Math.abs(delta) < 20;
-                const sensitivity = isTrackpad ? 0.008 : 0.002;
-
-                const factor = 1 - delta * sensitivity;
-
-                const zoomOld = zoomRef.current;
-                const zoomNew = Math.min(5, Math.max(0.1, Math.round(zoomOld * factor * 100) / 100));
-                if (zoomNew === zoomOld) return;
-
-                const cursorViewX = e.clientX - rect.left;
-                const cursorViewY = e.clientY - rect.top;
-
-                const scrollLeftNew = (el.scrollLeft + cursorViewX - MARGIN) * (zoomNew / zoomOld) + MARGIN - cursorViewX;
-                const scrollTopNew = (el.scrollTop + cursorViewY - MARGIN) * (zoomNew / zoomOld) + MARGIN - cursorViewY;
-
-                applyZoom(zoomNew);
-                el.scrollLeft = scrollLeftNew;
-                el.scrollTop = scrollTopNew;
-                clampScroll(el, zoomNew);
-                return;
-            }
-
-            e.preventDefault();
-            const { deltaX, deltaY } = getWheelDeltas(e);
-            if (deltaX !== 0) el.scrollLeft += deltaX;
-            if (deltaY !== 0) el.scrollTop += deltaY;
-            clampScroll(el, zoomRef.current);
+            applyZoom(zoomNew);
+            el.scrollLeft = scrollLeftNew;
+            el.scrollTop = scrollTopNew;
+            clampScroll(el, zoomNew);
         };
 
-        window.addEventListener('wheel', handleWheel, { passive: false, capture: true });
-        return () => window.removeEventListener('wheel', handleWheel, { capture: true });
+        el.addEventListener('wheel', handleWheel, { passive: false });
+        return () => el.removeEventListener('wheel', handleWheel);
     }, [scrollRef, applyZoom, clampScroll]);
 
     // ─── 通常スクロール（非Ctrl）のクランプ ──────────────────────────────
