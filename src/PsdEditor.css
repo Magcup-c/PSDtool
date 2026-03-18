@@ -857,7 +857,6 @@ button:active {
     overflow: scroll;
     /* ネイティブスクロールに委譲 */
     position: relative;
-    cursor: grab;
     scrollbar-width: none;
     /* Firefox */
     -ms-overflow-style: none;
@@ -1778,4 +1777,20 @@ canvas {
 @keyframes fileMenuIn {
     from { opacity: 0; transform: translateY(-4px); }
     to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ズーム直接入力 */
+.zoom-input {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--fg);
+    background: var(--bg-surface);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    text-align: center;
+    outline: none;
+    padding: 1px 2px;
+    width: 48px;
+    min-width: 48px;
+    cursor: text;
 }

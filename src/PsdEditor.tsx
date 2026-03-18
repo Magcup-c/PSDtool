@@ -7,7 +7,7 @@ import { readPsd, writePsd, Psd } from 'ag-psd';
 import {
     FolderOpen, Save, Layers,
     Image as ImageIcon,
-    Monitor, ZoomIn, ZoomOut, Maximize, X, Minus, Square, Download, FlipHorizontal2,
+    Monitor, ZoomIn, ZoomOut, Maximize, Maximize2, Minimize, X, Minus, Square, Download, FlipHorizontal2,
     FlipVertical2, Asterisk, Pin, Replace, ChevronsDownUp,
     ChevronsUpDown, Plus, FolderPlus, Search, Settings,
 } from 'lucide-react';
@@ -58,26 +58,67 @@ const PsdEditor = () => {
     const drawDirtyRef = useRef(false);
     const drawRafRef = useRef<number | null>(null);
 
-    const { zoom, handleZoom, resetZoom, centerPsd, MARGIN, SCROLL_AREA } = useZoomPan(psdRef, scrollRef, canvasContainerRef);
+    const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } = useZoomPan(psdRef, scrollRef, canvasContainerRef);
 
-    // ── psd がセットされたらスクロール領域が DOM に描画された後にセンタリング ──
+    // ── psd がセットされたらレイアウト確定後にセンタリング ──────────────────
     const isFirstLoadRef = useRef(true);
     useEffect(() => {
         if (!psd) return;
         if (!isFirstLoadRef.current) return;
         isFirstLoadRef.current = false;
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
+
+        const el = scrollRef.current;
+        if (!el) return;
+
+        // clientWidth が既に確定していればすぐセンタリング
+        if (el.clientWidth > 0) {
+            centerPsd();
+            return;
+        }
+
+        // まだ 0 の場合は ResizeObserver で幅が確定するのを待つ
+        const ro = new ResizeObserver(() => {
+            if (el.clientWidth > 0) {
+                ro.disconnect();
                 centerPsd();
-            });
+            }
         });
-    }, [psd, centerPsd]);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [psd, centerPsd, scrollRef]);
 
     const appWindow = getCurrentWindow();
     const handleMinimize = () => appWindow.minimize();
     const handleMaximize = () => appWindow.toggleMaximize();
     const handleClose = () => appWindow.close();
     const handleCloseNotification = useCallback(() => setNotification(null), []);
+
+    // ── 全画面 ────────────────────────────────────────────────────────────────
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const handleToggleFullscreen = useCallback(async () => {
+        const next = !isFullscreen;
+        await appWindow.setFullscreen(next);
+        setIsFullscreen(next);
+    }, [appWindow, isFullscreen]);
+
+    // ── ズーム入力 ────────────────────────────────────────────────────────────
+    const [zoomInputActive, setZoomInputActive] = useState(false);
+    const [zoomInputValue, setZoomInputValue] = useState('');
+    const zoomInputRef = useRef<HTMLInputElement>(null);
+
+    const handleZoomInputFocus = useCallback(() => {
+        setZoomInputValue(String(Math.round(zoom * 100)));
+        setZoomInputActive(true);
+        setTimeout(() => zoomInputRef.current?.select(), 0);
+    }, [zoom]);
+
+    const handleZoomInputCommit = useCallback(() => {
+        setZoomInputActive(false);
+        const parsed = parseInt(zoomInputValue, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+            setZoomTo(Math.min(500, Math.max(10, parsed)) / 100);
+        }
+    }, [zoomInputValue, setZoomTo]);
 
     const handleToggleExpand = useCallback((key: string) => {
         setClosedKeys(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
@@ -177,6 +218,12 @@ const PsdEditor = () => {
                 if (window.getSelection()?.toString().length) return;
                 e.preventDefault(); handleCopyCanvas();
             }
+            // F11 で全画面トグル
+            if (e.key === 'F11') {
+                e.preventDefault();
+                handleToggleFullscreen();
+                return;
+            }
             // Ctrl+O でファイルを開く
             if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
@@ -191,7 +238,7 @@ const PsdEditor = () => {
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [handleUndo, handleRedo, handleCopyCanvas, handleOpenFile]);
+    }, [handleUndo, handleRedo, handleCopyCanvas, handleOpenFile, handleToggleFullscreen]);
 
     const handleSaveFile = async () => {
         if (!psd) return;
@@ -411,7 +458,7 @@ const PsdEditor = () => {
 
         const buildFlipVariantMap = (layers: any[]) => {
             const map = new Map<string, any>();
-            if (!flipSuffix) return map;
+            if (!flipEnabled || !flipSuffix) return map;
             for (const l of layers) {
                 const lowerName = (l.name || '').toLowerCase();
                 if (lowerName.endsWith(flipSuffix.toLowerCase())) map.set(getBaseName(l.name || '').toLowerCase(), l);
@@ -423,7 +470,12 @@ const PsdEditor = () => {
             for (const layer of layers) {
                 if (layer.hidden) continue;
                 const name = layer.name || '';
-                if (hasFlipSuffix(name)) continue;
+                if (flipEnabled && hasFlipSuffix(name)) {
+                    // このflipレイヤーが実際に代替として使われている場合のみスキップ
+                    // （使われていない場合＝flipSuffixが一致しない場合は普通に描画）
+                    const suffix = getFlipSuffix().toLowerCase();
+                    if (suffix && name.toLowerCase().endsWith(suffix)) continue;
+                }
                 const effectiveLayer = flipVariantMap.get(name.toLowerCase()) ?? layer;
                 if (effectiveLayer.children) drawLayers(effectiveLayer.children);
                 else if (effectiveLayer.canvas) ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
@@ -503,9 +555,34 @@ const PsdEditor = () => {
                         <button onClick={() => setFlipY(v => !v)} className={flipY ? 'btn-active' : ''} title="Flip Vertical"><FlipVertical2 size={16} /></button>
                         <div className="zoom-sep" />
                         <button onClick={() => handleZoom(-0.1)} title="Zoom Out"><ZoomOut size={16} /></button>
-                        <span className="zoom-value" onClick={resetZoom} title="Reset Zoom">{Math.round(zoom * 100)}%</span>
+                        {zoomInputActive ? (
+                            <input
+                                ref={zoomInputRef}
+                                type="text"
+                                className="zoom-value zoom-input"
+                                value={zoomInputValue}
+                                onChange={e => setZoomInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                                onBlur={handleZoomInputCommit}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter') { e.preventDefault(); handleZoomInputCommit(); }
+                                    if (e.key === 'Escape') { setZoomInputActive(false); }
+                                }}
+                            />
+                        ) : (
+                            <span
+                                className="zoom-value"
+                                onClick={handleZoomInputFocus}
+                                title="クリックして数値入力"
+                            >{Math.round(zoom * 100)}%</span>
+                        )}
                         <button onClick={() => handleZoom(0.1)} title="Zoom In"><ZoomIn size={16} /></button>
                         <button onClick={resetZoom} title="Reset View"><Maximize size={16} /></button>
+                        <div className="zoom-sep" />
+                        <button
+                            onClick={handleToggleFullscreen}
+                            className={isFullscreen ? 'btn-active' : ''}
+                            title={`全画面 (F11)`}
+                        >{isFullscreen ? <Minimize size={16} /> : <Maximize2 size={16} />}</button>
                     </div>
                 )}
                 <div className="btn-group" style={{ marginLeft: psd ? undefined : 'auto' }}>
@@ -644,8 +721,8 @@ const PsdEditor = () => {
                                 className="canvas-container"
                                 style={{
                                     position: 'absolute',
-                                    left: MARGIN,
-                                    top: MARGIN,
+                                    left: SCROLL_AREA / 2 - psd.width  / 2,
+                                    top:  SCROLL_AREA / 2 - psd.height / 2,
                                     width: psd.width,
                                     height: psd.height,
                                     transform: `scale(${zoom})`,
