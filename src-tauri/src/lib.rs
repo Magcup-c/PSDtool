@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use tauri::Manager;
+mod raw_input;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -18,6 +19,7 @@ pub fn run() {
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             window.show().unwrap();
+            let _ = raw_input::install(&window, app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())

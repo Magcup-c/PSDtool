@@ -9,7 +9,7 @@ import {
     Image as ImageIcon,
     Monitor, ZoomIn, ZoomOut, Maximize, X, Minus, Square, Download, FlipHorizontal2,
     FlipVertical2, Asterisk, Pin, Replace, ChevronsDownUp,
-    ChevronsUpDown, Plus, FolderPlus, Search,
+    ChevronsUpDown, Plus, FolderPlus, Search, Settings,
 } from 'lucide-react';
 import './PsdEditor.css';
 
@@ -18,11 +18,17 @@ import { DropTargetInfo } from './types';
 import { Toast } from './components/Toast';
 import { SearchResultRow } from './components/SearchResultRow';
 import { LayerItem } from './components/LayerItem';
+import { SettingsModal } from './components/SettingsModal';
 import { usePsdHistory } from './hooks/usePsdHistory';
 import { useZoomPan } from './hooks/useZoomPan';
+import { useSettings } from './hooks/useSettings';
 
 const PsdEditor = () => {
     const { psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
+
+    // ── 設定 ──────────────────────────────────────────────────────────────────
+    const { settings, updateSettings } = useSettings();
+    const [showSettings, setShowSettings] = useState(false);
 
     const [isLoading, setIsLoading] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
@@ -31,7 +37,6 @@ const PsdEditor = () => {
     const [radioEnabled, setRadioEnabled] = useState(true);
     const [lockedEnabled, setLockedEnabled] = useState(true);
     const [flipEnabled, setFlipEnabled] = useState(true);
-    const [theme, setTheme] = useState<'black' | 'grey' | 'light' | 'white'>('grey');
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
     const [closedKeys, setClosedKeys] = useState<Set<string>>(new Set());
     const [draggingPath, setDraggingPath] = useState<number[] | null>(null);
@@ -51,13 +56,10 @@ const PsdEditor = () => {
     const { zoom, handleZoom, resetZoom, centerPsd, MARGIN, SCROLL_AREA } = useZoomPan(psdRef, scrollRef, canvasContainerRef);
 
     // ── psd がセットされたらスクロール領域が DOM に描画された後にセンタリング ──
-    // requestAnimationFrame を2重にすることで、
-    // React の再レンダリング → ブラウザのレイアウト計算 → センタリング
-    // の順序を確実に保証する。
     const isFirstLoadRef = useRef(true);
     useEffect(() => {
         if (!psd) return;
-        if (!isFirstLoadRef.current) return; // 2回目以降（レイヤー操作等）は不要
+        if (!isFirstLoadRef.current) return;
         isFirstLoadRef.current = false;
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -65,9 +67,6 @@ const PsdEditor = () => {
             });
         });
     }, [psd, centerPsd]);
-
-    // 新しいファイルを開いた時にフラグをリセット
-    const prevPsdIdRef = useRef<number>(0);
 
     const appWindow = getCurrentWindow();
     const handleMinimize = () => appWindow.minimize();
@@ -127,7 +126,6 @@ const PsdEditor = () => {
 
     const loadPsdFromFilePath = useCallback(async (path: string) => {
         setIsLoading(true);
-        // 新ファイルロード時はセンタリングフラグをリセット
         isFirstLoadRef.current = true;
         try {
             const data = await readFile(path);
@@ -137,7 +135,6 @@ const PsdEditor = () => {
                 cacheDataUrls(parsedPsd.children);
             }
             setPsd(parsedPsd);
-            // センタリングは上の useEffect（psd 変化監視）で行う
         } catch (err) {
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
         }
@@ -166,6 +163,11 @@ const PsdEditor = () => {
             if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey)) {
                 if (window.getSelection()?.toString().length) return;
                 e.preventDefault(); handleCopyCanvas();
+            }
+            // Cmd/Ctrl + , で設定を開く
+            if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                setShowSettings(true);
             }
         };
         window.addEventListener('keydown', onKeyDown);
@@ -431,8 +433,32 @@ const PsdEditor = () => {
         return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
     }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
 
+    // ── 言語ラベル ────────────────────────────────────────────────────────────
+    const lang = settings.language;
+    const L = {
+        open:        lang === 'ja' ? '開く'      : 'Open',
+        png:         'PNG',
+        savePsd:     lang === 'ja' ? '保存'      : 'Save PSD',
+        workspace:   lang === 'ja' ? 'ワークスペース' : 'Workspace',
+        layers:      lang === 'ja' ? 'レイヤー'  : 'Layers',
+        addLayer:    lang === 'ja' ? 'レイヤー追加' : 'Add layer',
+        addGroup:    lang === 'ja' ? 'グループ追加' : 'Add group',
+        expandAll:   lang === 'ja' ? 'すべて展開' : 'Expand all',
+        collapseAll: lang === 'ja' ? 'すべて折りたたむ' : 'Collapse all',
+        searchPlaceholder: lang === 'ja' ? 'レイヤーを検索...' : 'Search layers...',
+        radio:       lang === 'ja' ? 'ラジオ'    : 'Radio',
+        fixed:       lang === 'ja' ? '固定'      : 'Fixed',
+        flip:        lang === 'ja' ? 'フリップ'  : 'Flip',
+        dropPsd:     lang === 'ja' ? 'PSDファイルをドロップ' : 'Drop a PSD file here',
+        noLayers:    lang === 'ja' ? 'レイヤーが見つかりません' : 'No layers found',
+        loading:     lang === 'ja' ? 'ワークスペースを解析中…' : 'Analyzing workspace…',
+        dragDrop:    lang === 'ja' ? 'インポート準備完了' : 'Ready to Import',
+        dragRelease: lang === 'ja' ? 'ドロップして開く' : 'Release to open your PSD',
+        settings:    lang === 'ja' ? '設定'      : 'Settings',
+    };
+
     return (
-        <div className={`psd-editor theme-${theme} ${isDragging ? 'is-dragging' : ''}`}>
+        <div className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}>
             <div className="custom-title-bar" data-tauri-drag-region onMouseDown={(e) => { if (e.button === 0) appWindow.startDragging(); }}>
                 <div className="title-bar-brand" data-tauri-drag-region>
                     <ImageIcon size={14} /><span>PSD STUDIO</span>
@@ -445,14 +471,10 @@ const PsdEditor = () => {
             </div>
 
             <header className="editor-header">
-                <div className="brand"><Layers size={20} className="text-accent" /><h1>Workspace</h1></div>
-                <div className="theme-switcher">
-                    {(['black', 'grey', 'light', 'white'] as const).map((t) => (
-                        <button key={t} className={`theme-btn ${theme === t ? 'active' : ''}`} onClick={() => setTheme(t)} title={`${t.charAt(0).toUpperCase() + t.slice(1)} Theme`}>
-                            <div className={`swatch theme-${t}`} />
-                        </button>
-                    ))}
-                </div>
+                <div className="brand"><Layers size={20} className="text-accent" /><h1>{L.workspace}</h1></div>
+
+                {/* テーマスイッチャーは設定モーダルに移動。ここは削除 */}
+
                 {psd && (
                     <div className="zoom-controls">
                         <button onClick={() => setFlipX(v => !v)} className={flipX ? 'btn-active' : ''} title="Flip Horizontal"><FlipHorizontal2 size={16} /></button>
@@ -464,11 +486,19 @@ const PsdEditor = () => {
                         <button onClick={resetZoom} title="Reset View"><Maximize size={16} /></button>
                     </div>
                 )}
-                <div className="btn-group">
-                    <button onClick={handleOpenFile}><FolderOpen size={18} /><span>Open</span></button>
+                <div className="btn-group" style={{ marginLeft: psd ? undefined : 'auto' }}>
+                    {/* 設定ボタン */}
+                    <button
+                        onClick={() => setShowSettings(true)}
+                        title={`${L.settings} (Ctrl+,)`}
+                        className="btn-settings"
+                    >
+                        <Settings size={16} />
+                    </button>
+                    <button onClick={handleOpenFile}><FolderOpen size={18} /><span>{L.open}</span></button>
                     {psd && (<>
-                        <button onClick={handleExportPng} className="btn-secondary"><Download size={18} /><span>PNG</span></button>
-                        <button onClick={handleSaveFile} className="btn-primary"><Save size={18} /><span>Save PSD</span></button>
+                        <button onClick={handleExportPng} className="btn-secondary"><Download size={18} /><span>{L.png}</span></button>
+                        <button onClick={handleSaveFile} className="btn-primary"><Save size={18} /><span>{L.savePsd}</span></button>
                     </>)}
                 </div>
             </header>
@@ -476,16 +506,16 @@ const PsdEditor = () => {
             <div className="editor-main">
                 <aside className="layer-panel">
                     <div className="panel-header">
-                        <h2>Layers</h2>
+                        <h2>{L.layers}</h2>
                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                             {psd && !searchResults && (<>
-                                <button className="toggle-expand" onClick={handleAddLayer} title="Add layer"><Plus size={14} /></button>
-                                <button className="toggle-expand" onClick={handleAddGroup} title="Add group"><FolderPlus size={14} /></button>
+                                <button className="toggle-expand" onClick={handleAddLayer} title={L.addLayer}><Plus size={14} /></button>
+                                <button className="toggle-expand" onClick={handleAddGroup} title={L.addGroup}><FolderPlus size={14} /></button>
                                 <div style={{ width: 1, height: 14, background: 'var(--line-mid)', margin: '0 2px' }} />
                             </>)}
                             {!searchResults && (<>
-                                <button className="toggle-expand" onClick={handleExpandAll} title="Expand all groups"><ChevronsUpDown size={14} /></button>
-                                <button className="toggle-expand" onClick={handleCollapseAll} title="Collapse all groups"><ChevronsDownUp size={14} /></button>
+                                <button className="toggle-expand" onClick={handleExpandAll} title={L.expandAll}><ChevronsUpDown size={14} /></button>
+                                <button className="toggle-expand" onClick={handleCollapseAll} title={L.collapseAll}><ChevronsDownUp size={14} /></button>
                             </>)}
                         </div>
                     </div>
@@ -495,7 +525,7 @@ const PsdEditor = () => {
                             <Search size={12} className="layer-search-icon" />
                             <input
                                 ref={searchInputRef} type="text" className="layer-search-input"
-                                placeholder="Search layers..." value={searchQuery}
+                                placeholder={L.searchPlaceholder} value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
                             />
@@ -509,15 +539,14 @@ const PsdEditor = () => {
 
                     {!searchResults && (
                         <div className="layer-mode-bar">
-                            <button className={`mode-toggle ${radioEnabled ? 'active' : ''}`} onClick={() => setRadioEnabled(v => !v)} title="Radio group mode"><Asterisk size={13} /><span>Radio</span></button>
-                            <button className={`mode-toggle ${lockedEnabled ? 'active' : ''}`} onClick={() => setLockedEnabled(v => !v)} title="Locked visibility mode"><Pin size={13} /><span>Fixed</span></button>
-                            <button className={`mode-toggle ${flipEnabled ? 'active' : ''}`} onClick={() => setFlipEnabled(v => !v)} title="Flip variant mode"><Replace size={13} /><span>Flip</span></button>
+                            <button className={`mode-toggle ${radioEnabled ? 'active' : ''}`} onClick={() => setRadioEnabled(v => !v)} title="Radio group mode"><Asterisk size={13} /><span>{L.radio}</span></button>
+                            <button className={`mode-toggle ${lockedEnabled ? 'active' : ''}`} onClick={() => setLockedEnabled(v => !v)} title="Locked visibility mode"><Pin size={13} /><span>{L.fixed}</span></button>
+                            <button className={`mode-toggle ${flipEnabled ? 'active' : ''}`} onClick={() => setFlipEnabled(v => !v)} title="Flip variant mode"><Replace size={13} /><span>{L.flip}</span></button>
                         </div>
                     )}
 
                     <div className="layer-scroll" ref={layerScrollRef}>
                         {isLoading ? (
-                            // ── ローディング中：シマーアニメーション ──
                             <div className="layer-loading">
                                 {Array.from({ length: 8 }).map((_, i) => (
                                     <div key={i} className="layer-shimmer-row" style={{ animationDelay: `${i * 60}ms` }}>
@@ -537,7 +566,7 @@ const PsdEditor = () => {
                                         ))}
                                     </div>
                                 ) : (
-                                    <div className="empty-state"><p>No layers found</p></div>
+                                    <div className="empty-state"><p>{L.noLayers}</p></div>
                                 )
                             ) : (
                                 <ul className="layer-list">
@@ -562,7 +591,7 @@ const PsdEditor = () => {
                             )
                         ) : (
                             <div className="empty-state">
-                                <p>Drop a PSD file here</p>
+                                <p>{L.dropPsd}</p>
                             </div>
                         )}
                     </div>
@@ -578,21 +607,16 @@ const PsdEditor = () => {
                     } as React.CSSProperties}
                 >
                     {isLoading ? (
-                        // ── ローディング中：プレビューエリアのスピナー ──
                         <div className="preview-loading">
                             <div className="preview-loading-inner">
                                 <div className="loading-spinner" />
-                                <p className="loading-label">Analyzing workspace…</p>
+                                <p className="loading-label">{L.loading}</p>
                             </div>
                         </div>
                     ) : psd ? (
                         <div
                             className="preview-scroll-inner"
-                            style={{
-                                width: SCROLL_AREA,
-                                height: SCROLL_AREA,
-                                position: 'relative',
-                            }}
+                            style={{ width: SCROLL_AREA, height: SCROLL_AREA, position: 'relative' }}
                         >
                             <div
                                 ref={canvasContainerRef}
@@ -613,7 +637,7 @@ const PsdEditor = () => {
                     ) : (
                         <div className="placeholder" style={{ position: 'absolute', inset: 0 }}>
                             <Monitor className="placeholder-icon" />
-                            <p>Drag and drop or import a PSD file to start</p>
+                            <p>{L.dropPsd}</p>
                         </div>
                     )}
                 </div>
@@ -623,9 +647,18 @@ const PsdEditor = () => {
                 <div className="drag-overlay">
                     <div className="drag-message">
                         <div className="overlay-icon-ring"><Download size={48} /></div>
-                        <div className="overlay-text"><h3>Ready to Import</h3><p>Release to open your PSD masterpiece</p></div>
+                        <div className="overlay-text"><h3>{L.dragDrop}</h3><p>{L.dragRelease}</p></div>
                     </div>
                 </div>
+            )}
+
+            {/* ── 設定モーダル ── */}
+            {showSettings && (
+                <SettingsModal
+                    settings={settings}
+                    onUpdate={updateSettings}
+                    onClose={() => setShowSettings(false)}
+                />
             )}
 
             {notification && <Toast message={notification.message} type={notification.type} onClose={handleCloseNotification} />}

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { Psd } from 'ag-psd';
 
 const MARGIN = 200;
@@ -11,6 +12,8 @@ export function useZoomPan(
 ) {
     const [zoom, setZoom] = useState(1);
     const zoomRef = useRef(1);
+    const rawInputActiveRef = useRef(false);
+    const rawInputTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     /**
      * スクロール位置をキャンバス表示範囲（+ MARGIN）に制限する。
@@ -116,6 +119,62 @@ export function useZoomPan(
         el.addEventListener('wheel', handleWheel, { passive: false });
         return () => el.removeEventListener('wheel', handleWheel);
     }, [scrollRef, applyZoom, clampScroll]);
+
+    // ─── Raw Input (Windows) 2D scroll fallback ────────────────────────────
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+
+        const RAW_WHEEL_SCALE = 1;
+        const RAW_ACTIVE_TIMEOUT = 500;
+
+        let unlisten: null | (() => void) = null;
+
+        const markRawActive = () => {
+            rawInputActiveRef.current = true;
+            if (rawInputTimerRef.current) clearTimeout(rawInputTimerRef.current);
+            rawInputTimerRef.current = setTimeout(() => {
+                rawInputActiveRef.current = false;
+            }, RAW_ACTIVE_TIMEOUT);
+        };
+
+        listen<{
+            dx: number;
+            dy: number;
+            ctrl: boolean;
+            shift: boolean;
+            alt: boolean;
+            meta: boolean;
+        }>('raw-wheel', (event) => {
+            const payload = event.payload;
+            if (!payload || payload.ctrl || payload.meta) return;
+            markRawActive();
+
+            const dx = payload.dx * RAW_WHEEL_SCALE;
+            const dy = -payload.dy * RAW_WHEEL_SCALE;
+            if (dx !== 0) el.scrollLeft += dx;
+            if (dy !== 0) el.scrollTop += dy;
+            clampScroll(el, zoomRef.current);
+        }).then((u) => {
+            unlisten = u;
+        }).catch(() => {
+            unlisten = null;
+        });
+
+        const onWheel = (e: WheelEvent) => {
+            if (rawInputActiveRef.current && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+            }
+        };
+
+        el.addEventListener('wheel', onWheel, { passive: false });
+
+        return () => {
+            if (rawInputTimerRef.current) clearTimeout(rawInputTimerRef.current);
+            if (unlisten) unlisten();
+            el.removeEventListener('wheel', onWheel);
+        };
+    }, [scrollRef, clampScroll]);
 
     // ─── 通常スクロール（非Ctrl）のクランプ ──────────────────────────────
     useEffect(() => {
