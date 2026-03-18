@@ -1,6 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use tauri::Manager;
-mod raw_input;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -9,8 +8,6 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // [FIX] Bug #1: プラグイン登録はここ1か所に集約。
-    // main.rs 側の独自 Builder は削除し、window.show() もここで行う。
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -19,7 +16,6 @@ pub fn run() {
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             window.show().unwrap();
-            let _ = raw_input::install(&window, app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())

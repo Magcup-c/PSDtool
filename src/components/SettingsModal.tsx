@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Monitor, ZoomIn, Globe, Check } from 'lucide-react';
+import { X, Monitor, ZoomIn, Globe, Check, Laptop } from 'lucide-react';
 import { AppSettings } from '../hooks/useSettings';
 
 interface SettingsModalProps {
@@ -12,36 +12,48 @@ const T = {
     ja: {
         title: '設定',
         appearance: '外観',
-        theme: 'テーマ',
-        themeDesc: 'エディターの配色テーマを選択します',
+        theme: 'カラーテーマ',
+        themeDesc: '配色テーマ',
         canvas: 'キャンバス',
-        defaultZoom: 'デフォルトズーム',
-        defaultZoomDesc: 'ファイルを開いた時の初期倍率',
-        general: '一般',
-        language: '言語',
-        languageDesc: 'UIの表示言語',
+        defaultZoom: '初期ズーム',
+        defaultZoomDesc: 'ファイルを開いた時の倍率',
+        general: '基本',
+        language: '表示言語',
+        languageDesc: 'UI言語',
+        syncTheme: 'OS設定に従う',
+        syncThemeDesc: 'ライト / ダークを自動切り替え',
+        syncLang: 'OS設定に従う',
+        syncLangDesc: 'システム言語を使用',
+        recentFiles: '最近使ったファイル',
+        recentFilesDesc: '履歴の最大件数',
         cancel: 'キャンセル',
-        apply: '適用',
+        apply: 'OK',
         themes: {
-            black: 'ブラック',
-            grey: 'グレー',
-            light: 'ライト',
-            white: 'ホワイト',
+            black: 'Black',
+            grey: 'Grey',
+            light: 'Light',
+            white: 'White',
         },
     },
     en: {
         title: 'Settings',
         appearance: 'Appearance',
-        theme: 'Theme',
-        themeDesc: 'Choose the editor color scheme',
+        theme: 'Color Theme',
+        themeDesc: 'Color scheme',
+        syncTheme: 'Follow OS',
+        syncThemeDesc: 'Auto-switch light / dark',
         canvas: 'Canvas',
         defaultZoom: 'Default Zoom',
-        defaultZoomDesc: 'Initial zoom level when opening a file',
+        defaultZoomDesc: 'Zoom level on file open',
         general: 'General',
         language: 'Language',
-        languageDesc: 'UI display language',
+        languageDesc: 'UI language',
+        syncLang: 'Follow OS',
+        syncLangDesc: 'Use system language',
+        recentFiles: 'Recent Files',
+        recentFilesDesc: 'Max entries in history',
         cancel: 'Cancel',
-        apply: 'Apply',
+        apply: 'OK',
         themes: {
             black: 'Black',
             grey: 'Grey',
@@ -61,7 +73,11 @@ const THEME_COLORS: Record<AppSettings['theme'], { bg: string; panel: string; ac
 const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.5, 2];
 
 export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProps) => {
-    const [local, setLocal] = useState<AppSettings>({ ...settings });
+    const [local, setLocal] = useState<AppSettings>({
+        syncThemeWithOS: false,
+        syncLangWithOS: false,
+        ...settings,
+    });
     const t = T[local.language];
 
     const patch = (p: Partial<AppSettings>) => setLocal(prev => ({ ...prev, ...p }));
@@ -107,8 +123,8 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                     return (
                                         <button
                                             key={th}
-                                            className={`settings-theme-card ${isActive ? 'active' : ''}`}
-                                            onClick={() => patch({ theme: th })}
+                                            className={`settings-theme-card ${isActive ? 'active' : ''} ${local.syncThemeWithOS ? 'disabled' : ''}`}
+                                            onClick={() => !local.syncThemeWithOS && patch({ theme: th })}
                                         >
                                             {/* ミニプレビュー */}
                                             <div className="theme-preview" style={{ background: c.bg }}>
@@ -125,6 +141,20 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                     );
                                 })}
                             </div>
+                            {/* OS 同期トグル */}
+                            <label className="settings-os-sync-row">
+                                <div className="settings-os-sync-text">
+                                    <Laptop size={12} />
+                                    <div>
+                                        <div className="settings-os-sync-label">{t.syncTheme}</div>
+                                        <div className="settings-os-sync-desc">{t.syncThemeDesc}</div>
+                                    </div>
+                                </div>
+                                <div
+                                    className={`settings-toggle ${local.syncThemeWithOS ? 'on' : ''}`}
+                                    onClick={() => patch({ syncThemeWithOS: !local.syncThemeWithOS })}
+                                />
+                            </label>
                         </div>
                     </div>
 
@@ -161,15 +191,45 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
 
                         <div className="settings-field">
                             <div className="settings-field-label">{t.language}</div>
-                            <div className="settings-field-desc">{t.languageDesc}</div>
-                            <div className="settings-lang-toggle">
+                            <div className="settings-field-desc">{t.languageDesc}</div>                            <div className="settings-lang-toggle">
                                 {(['ja', 'en'] as const).map(lang => (
                                     <button
                                         key={lang}
-                                        className={`settings-lang-btn ${local.language === lang ? 'active' : ''}`}
-                                        onClick={() => patch({ language: lang })}
+                                        className={`settings-lang-btn ${local.language === lang ? 'active' : ''} ${local.syncLangWithOS ? 'disabled' : ''}`}
+                                        onClick={() => !local.syncLangWithOS && patch({ language: lang })}
                                     >
                                         {lang === 'ja' ? '日本語' : 'English'}
+                                    </button>
+                                ))}
+                            </div>
+                            {/* OS 同期トグル */}
+                            <label className="settings-os-sync-row" style={{ marginTop: 8 }}>
+                                <div className="settings-os-sync-text">
+                                    <Laptop size={12} />
+                                    <div>
+                                        <div className="settings-os-sync-label">{t.syncLang}</div>
+                                        <div className="settings-os-sync-desc">{t.syncLangDesc}</div>
+                                    </div>
+                                </div>
+                                <div
+                                    className={`settings-toggle ${local.syncLangWithOS ? 'on' : ''}`}
+                                    onClick={() => patch({ syncLangWithOS: !local.syncLangWithOS })}
+                                />
+                            </label>
+                        </div>
+
+                        {/* 履歴件数 */}
+                        <div className="settings-field" style={{ marginTop: 12 }}>
+                            <div className="settings-field-label">{t.recentFiles}</div>
+                            <div className="settings-field-desc">{t.recentFilesDesc}</div>
+                            <div className="settings-zoom-presets">
+                                {[5, 10, 15, 20].map(n => (
+                                    <button
+                                        key={n}
+                                        className={`settings-zoom-btn ${(local.maxRecentFiles ?? 10) === n ? 'active' : ''}`}
+                                        onClick={() => patch({ maxRecentFiles: n })}
+                                    >
+                                        {n}
                                     </button>
                                 ))}
                             </div>

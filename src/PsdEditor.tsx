@@ -19,9 +19,11 @@ import { Toast } from './components/Toast';
 import { SearchResultRow } from './components/SearchResultRow';
 import { LayerItem } from './components/LayerItem';
 import { SettingsModal } from './components/SettingsModal';
+import { FileMenu } from './components/FileMenu';
 import { usePsdHistory } from './hooks/usePsdHistory';
 import { useZoomPan } from './hooks/useZoomPan';
 import { useSettings } from './hooks/useSettings';
+import { useRecentFiles } from './hooks/useRecentFiles';
 
 const PsdEditor = () => {
     const { psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
@@ -29,6 +31,9 @@ const PsdEditor = () => {
     // ── 設定 ──────────────────────────────────────────────────────────────────
     const { settings, updateSettings } = useSettings();
     const [showSettings, setShowSettings] = useState(false);
+
+    // ── 最近使ったファイル ────────────────────────────────────────────────────
+    const { recentFiles, addRecentFile, clearRecentFiles } = useRecentFiles(settings.maxRecentFiles ?? 10);
 
     const [isLoading, setIsLoading] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
@@ -135,6 +140,7 @@ const PsdEditor = () => {
                 cacheDataUrls(parsedPsd.children);
             }
             setPsd(parsedPsd);
+            addRecentFile(path);
         } catch (err) {
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
         }
@@ -154,6 +160,13 @@ const PsdEditor = () => {
         return () => { unlistenPromises.then(us => us.forEach(u => u())); };
     }, [loadPsdFromFilePath]);
 
+    const handleOpenFile = useCallback(async () => {
+        try {
+            const selected = await open({ multiple: false, filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
+            if (selected && typeof selected === 'string') loadPsdFromFilePath(selected);
+        } catch (err) { showToast(`Failed to open file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
+    }, [loadPsdFromFilePath]);
+
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
             const tag = (e.target as HTMLElement).tagName;
@@ -164,7 +177,13 @@ const PsdEditor = () => {
                 if (window.getSelection()?.toString().length) return;
                 e.preventDefault(); handleCopyCanvas();
             }
-            // Cmd/Ctrl + , で設定を開く
+            // Ctrl+O でファイルを開く
+            if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                handleOpenFile();
+                return;
+            }
+            // Ctrl+, で設定を開く
             if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 setShowSettings(true);
@@ -172,14 +191,7 @@ const PsdEditor = () => {
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [handleUndo, handleRedo, handleCopyCanvas]);
-
-    const handleOpenFile = async () => {
-        try {
-            const selected = await open({ multiple: false, filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
-            if (selected && typeof selected === 'string') loadPsdFromFilePath(selected);
-        } catch (err) { showToast(`Failed to open file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
-    };
+    }, [handleUndo, handleRedo, handleCopyCanvas, handleOpenFile]);
 
     const handleSaveFile = async () => {
         if (!psd) return;
@@ -436,32 +448,42 @@ const PsdEditor = () => {
     // ── 言語ラベル ────────────────────────────────────────────────────────────
     const lang = settings.language;
     const L = {
-        open:        lang === 'ja' ? '開く'      : 'Open',
+        open:        lang === 'ja' ? '開く'        : 'Open',
         png:         'PNG',
-        savePsd:     lang === 'ja' ? '保存'      : 'Save PSD',
-        workspace:   lang === 'ja' ? 'ワークスペース' : 'Workspace',
-        layers:      lang === 'ja' ? 'レイヤー'  : 'Layers',
+        savePsd:     lang === 'ja' ? '保存'        : 'Save PSD',
+        workspace:   lang === 'ja' ? 'Studio'      : 'Studio',
+        layers:      lang === 'ja' ? 'Layers'      : 'Layers',
         addLayer:    lang === 'ja' ? 'レイヤー追加' : 'Add layer',
         addGroup:    lang === 'ja' ? 'グループ追加' : 'Add group',
-        expandAll:   lang === 'ja' ? 'すべて展開' : 'Expand all',
-        collapseAll: lang === 'ja' ? 'すべて折りたたむ' : 'Collapse all',
-        searchPlaceholder: lang === 'ja' ? 'レイヤーを検索...' : 'Search layers...',
-        radio:       lang === 'ja' ? 'ラジオ'    : 'Radio',
-        fixed:       lang === 'ja' ? '固定'      : 'Fixed',
-        flip:        lang === 'ja' ? 'フリップ'  : 'Flip',
-        dropPsd:     lang === 'ja' ? 'PSDファイルをドロップ' : 'Drop a PSD file here',
-        noLayers:    lang === 'ja' ? 'レイヤーが見つかりません' : 'No layers found',
-        loading:     lang === 'ja' ? 'ワークスペースを解析中…' : 'Analyzing workspace…',
-        dragDrop:    lang === 'ja' ? 'インポート準備完了' : 'Ready to Import',
-        dragRelease: lang === 'ja' ? 'ドロップして開く' : 'Release to open your PSD',
-        settings:    lang === 'ja' ? '設定'      : 'Settings',
+        expandAll:   lang === 'ja' ? '全展開'       : 'Expand all',
+        collapseAll: lang === 'ja' ? '全折りたたみ' : 'Collapse all',
+        searchPlaceholder: lang === 'ja' ? 'レイヤーを検索' : 'Search layers...',
+        radio:       'Radio',
+        fixed:       lang === 'ja' ? 'Fixed'       : 'Fixed',
+        flip:        'Flip',
+        dropPsd:     lang === 'ja' ? 'PSDをドロップ' : 'Drop a PSD file here',
+        noLayers:    lang === 'ja' ? '見つかりません' : 'No layers found',
+        loading:     lang === 'ja' ? '読み込み中…'  : 'Analyzing workspace…',
+        dragDrop:    lang === 'ja' ? 'ドロップして開く' : 'Ready to Import',
+        dragRelease: lang === 'ja' ? 'PSDファイルを離して読み込む' : 'Release to open your PSD',
+        settings:    lang === 'ja' ? '設定'        : 'Settings',
     };
 
     return (
         <div className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}>
             <div className="custom-title-bar" data-tauri-drag-region onMouseDown={(e) => { if (e.button === 0) appWindow.startDragging(); }}>
-                <div className="title-bar-brand" data-tauri-drag-region>
-                    <ImageIcon size={14} /><span>PSD STUDIO</span>
+                <div className="title-bar-left" data-tauri-drag-region>
+                    <div className="title-bar-brand" data-tauri-drag-region>
+                        <ImageIcon size={14} /><span>PSD STUDIO</span>
+                    </div>
+                    {/* ファイルメニュー */}
+                    <FileMenu
+                        recentFiles={recentFiles}
+                        onOpen={handleOpenFile}
+                        onOpenRecent={loadPsdFromFilePath}
+                        onClearRecent={clearRecentFiles}
+                        language={settings.language}
+                    />
                 </div>
                 <div className="window-controls">
                     <button onClick={handleMinimize} onMouseDown={(e) => e.stopPropagation()} className="control-btn mini" title="Minimize"><Minus size={14} /></button>
@@ -490,8 +512,7 @@ const PsdEditor = () => {
                     {/* 設定ボタン */}
                     <button
                         onClick={() => setShowSettings(true)}
-                        title={`${L.settings} (Ctrl+,)`}
-                        className="btn-settings"
+                        title={`${L.settings} (Ctrl+,)`}                        className="btn-settings"
                     >
                         <Settings size={16} />
                     </button>
