@@ -30,11 +30,9 @@ const PsdEditor = () => {
     const { psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
     const { loadPsd } = usePsdWorker();
 
-    // ── 設定 ──────────────────────────────────────────────────────────────────
     const { settings, updateSettings } = useSettings();
     const [showSettings, setShowSettings] = useState(false);
 
-    // ── 最近使ったファイル ────────────────────────────────────────────────────
     const { recentFiles, addRecentFile, clearRecentFiles } = useRecentFiles(settings.maxRecentFiles ?? 10);
 
     const [isLoading, setIsLoading] = useState(false);
@@ -62,7 +60,6 @@ const PsdEditor = () => {
 
     const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } = useZoomPan(psdRef, scrollRef, canvasContainerRef);
 
-    // ── psd がセットされたらレイアウト確定後にセンタリング ──────────────────
     const isFirstLoadRef = useRef(true);
     useEffect(() => {
         if (!psd) return;
@@ -93,7 +90,6 @@ const PsdEditor = () => {
     const handleClose = () => appWindow.close();
     const handleCloseNotification = useCallback(() => setNotification(null), []);
 
-    // ── 全画面 ────────────────────────────────────────────────────────────────
     const [isFullscreen, setIsFullscreen] = useState(false);
     const handleToggleFullscreen = useCallback(async () => {
         const next = !isFullscreen;
@@ -101,7 +97,6 @@ const PsdEditor = () => {
         setIsFullscreen(next);
     }, [appWindow, isFullscreen]);
 
-    // ── ズーム入力 ────────────────────────────────────────────────────────────
     const [zoomInputActive, setZoomInputActive] = useState(false);
     const [zoomInputValue, setZoomInputValue] = useState('');
     const zoomInputRef = useRef<HTMLInputElement>(null);
@@ -121,7 +116,11 @@ const PsdEditor = () => {
     }, [zoomInputValue, setZoomTo]);
 
     const handleToggleExpand = useCallback((key: string) => {
-        setClosedKeys(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+        setClosedKeys(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+        });
     }, []);
 
     const collectGroupKeys = useCallback((layers: any[], parentPath: number[] = []): string[] => {
@@ -142,7 +141,7 @@ const PsdEditor = () => {
         setClosedKeys(new Set(collectGroupKeys(psd.children)));
     }, [psd, collectGroupKeys]);
 
-    const isChildClosed = useCallback((childKey: string) => closedKeys.has(childKey), [closedKeys]);
+    // [FIX] isChildClosed は不要になったので削除
 
     const searchResults = useMemo(() => {
         const q = searchQuery.trim();
@@ -174,19 +173,10 @@ const PsdEditor = () => {
         setIsLoading(true);
         isFirstLoadRef.current = true;
         try {
-            // ① ファイル読み込み（メインスレッド）
             const data = await readFile(path);
-
-            // ② Worker に転送して PSD デコード + サムネイル生成（ゼロコピー）
             const result = await loadPsd(data.buffer);
-
-            // ③ PSD ツリーをすぐ setPsd → プレビュー・レイヤーリストが即表示
             setPsd(result.psd);
             addRecentFile(path);
-
-            // ④ _thumb / _bitmap を注入した新しい Psd で再セット
-            //    attachThumbs がイミュータブルに新オブジェクトを返すので
-            //    React.memo のキャッシュが正しく無効化されサムネが描画される
             if (result.layers.length > 0) {
                 setPsd(attachThumbs(result.psd, result.layers));
             }
@@ -226,20 +216,9 @@ const PsdEditor = () => {
                 if (window.getSelection()?.toString().length) return;
                 e.preventDefault(); handleCopyCanvas();
             }
-            if (e.key === 'F11') {
-                e.preventDefault();
-                handleToggleFullscreen();
-                return;
-            }
-            if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                handleOpenFile();
-                return;
-            }
-            if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                setShowSettings(true);
-            }
+            if (e.key === 'F11') { e.preventDefault(); handleToggleFullscreen(); return; }
+            if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleOpenFile(); return; }
+            if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setShowSettings(true); }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
@@ -299,15 +278,13 @@ const PsdEditor = () => {
     const handleAddLayer = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
-        const newPsd = { ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] };
-        commitPsd(newPsd);
+        commitPsd({ ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] });
     }, [commitPsd, psdRef]);
 
     const handleAddGroup = useCallback(() => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
-        const newPsd = { ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] };
-        commitPsd(newPsd);
+        commitPsd({ ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] });
     }, [commitPsd, psdRef]);
 
     const handleDeleteLayer = useCallback((path: number[]) => {
@@ -480,10 +457,8 @@ const PsdEditor = () => {
                 const effectiveLayer = flipVariantMap.get(name.toLowerCase()) ?? layer;
                 if (effectiveLayer.children) drawLayers(effectiveLayer.children);
                 else if (effectiveLayer._bitmap) {
-                    // Worker 化後は _bitmap（ImageBitmap）で描画
                     ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
                 } else if (effectiveLayer.canvas) {
-                    // フォールバック: undo スナップショット等で _bitmap がない場合
                     ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
                 }
             }
@@ -505,7 +480,6 @@ const PsdEditor = () => {
         return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
     }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
 
-    // ── 言語ラベル ────────────────────────────────────────────────────────────
     const lang = settings.language;
     const L = {
         open:        lang === 'ja' ? '開く'        : 'Open',
@@ -574,28 +548,20 @@ const PsdEditor = () => {
                                 }}
                             />
                         ) : (
-                            <span
-                                className="zoom-value"
-                                onClick={handleZoomInputFocus}
-                                title="クリックして数値入力"
-                            >{Math.round(zoom * 100)}%</span>
+                            <span className="zoom-value" onClick={handleZoomInputFocus} title="クリックして数値入力">
+                                {Math.round(zoom * 100)}%
+                            </span>
                         )}
                         <button onClick={() => handleZoom(0.1)} title="Zoom In"><ZoomIn size={16} /></button>
                         <button onClick={resetZoom} title="Reset View"><Maximize size={16} /></button>
                         <div className="zoom-sep" />
-                        <button
-                            onClick={handleToggleFullscreen}
-                            className={isFullscreen ? 'btn-active' : ''}
-                            title={`全画面 (F11)`}
-                        >{isFullscreen ? <Minimize size={16} /> : <Maximize2 size={16} />}</button>
+                        <button onClick={handleToggleFullscreen} className={isFullscreen ? 'btn-active' : ''} title="全画面 (F11)">
+                            {isFullscreen ? <Minimize size={16} /> : <Maximize2 size={16} />}
+                        </button>
                     </div>
                 )}
                 <div className="btn-group" style={{ marginLeft: psd ? undefined : 'auto' }}>
-                    <button
-                        onClick={() => setShowSettings(true)}
-                        title={`${L.settings} (Ctrl+,)`}
-                        className="btn-settings"
-                    >
+                    <button onClick={() => setShowSettings(true)} title={`${L.settings} (Ctrl+,)`} className="btn-settings">
                         <Settings size={16} />
                     </button>
                     <button onClick={handleOpenFile}><FolderOpen size={18} /><span>{L.open}</span></button>
@@ -678,14 +644,22 @@ const PsdEditor = () => {
                                         if (flipEnabled && hasFlipSuffix(layer.name || '')) return null;
                                         return (
                                             <LayerItem
-                                                key={originalIndex} layer={layer} path={[originalIndex]}
-                                                siblings={psd.children!} radioEnabled={radioEnabled}
-                                                lockedEnabled={lockedEnabled} flipEnabled={flipEnabled}
-                                                isClosed={closedKeys.has(String(originalIndex))} isChildClosed={isChildClosed}
-                                                onToggleExpand={handleToggleExpand} onToggle={toggleLayerVisibility}
-                                                onRename={renameLayer} onRadioSelect={toggleRadioLayer}
-                                                onDelete={handleDeleteLayer} onDragStart={handleLayerDragStart}
-                                                draggingPath={draggingPath} dropTarget={dropTarget}
+                                                key={originalIndex}
+                                                layer={layer}
+                                                path={[originalIndex]}
+                                                siblings={psd.children!}
+                                                radioEnabled={radioEnabled}
+                                                lockedEnabled={lockedEnabled}
+                                                flipEnabled={flipEnabled}
+                                                closedKeys={closedKeys}
+                                                onToggleExpand={handleToggleExpand}
+                                                onToggle={toggleLayerVisibility}
+                                                onRename={renameLayer}
+                                                onRadioSelect={toggleRadioLayer}
+                                                onDelete={handleDeleteLayer}
+                                                onDragStart={handleLayerDragStart}
+                                                draggingPath={draggingPath}
+                                                dropTarget={dropTarget}
                                                 hasFlipSuffix={hasFlipSuffix}
                                             />
                                         );
@@ -693,9 +667,7 @@ const PsdEditor = () => {
                                 </ul>
                             )
                         ) : (
-                            <div className="empty-state">
-                                <p>{L.dropPsd}</p>
-                            </div>
+                            <div className="empty-state"><p>{L.dropPsd}</p></div>
                         )}
                     </div>
                 </aside>
@@ -703,11 +675,7 @@ const PsdEditor = () => {
                 <div
                     className="preview-panel"
                     ref={scrollRef}
-                    style={{
-                        overflow: 'scroll',
-                        scrollbarWidth: 'none',
-                        msOverflowStyle: 'none',
-                    } as React.CSSProperties}
+                    style={{ overflow: 'scroll', scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
                 >
                     {isLoading ? (
                         <div className="preview-loading">
@@ -717,10 +685,7 @@ const PsdEditor = () => {
                             </div>
                         </div>
                     ) : psd ? (
-                        <div
-                            className="preview-scroll-inner"
-                            style={{ width: SCROLL_AREA, height: SCROLL_AREA, position: 'relative' }}
-                        >
+                        <div className="preview-scroll-inner" style={{ width: SCROLL_AREA, height: SCROLL_AREA, position: 'relative' }}>
                             <div
                                 ref={canvasContainerRef}
                                 className="canvas-container"
@@ -756,11 +721,7 @@ const PsdEditor = () => {
             )}
 
             {showSettings && (
-                <SettingsModal
-                    settings={settings}
-                    onUpdate={updateSettings}
-                    onClose={() => setShowSettings(false)}
-                />
+                <SettingsModal settings={settings} onUpdate={updateSettings} onClose={() => setShowSettings(false)} />
             )}
 
             {notification && <Toast message={notification.message} type={notification.type} onClose={handleCloseNotification} />}

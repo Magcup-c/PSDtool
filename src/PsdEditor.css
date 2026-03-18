@@ -560,6 +560,10 @@ button:active {
 .layer-list,
 .sub-layers {
     list-style: none;
+    margin-left: 10px;
+    padding-left: 0;          /* [FIX] padding-left を 0 に */
+    border-left: none;        /* [FIX] border-left を削除 */
+    position: relative;
 }
 
 .sub-layers {
@@ -662,15 +666,8 @@ button:active {
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    /* チェッカーボード（ライトテーマ用） */
-    background-color: #fff;
-    background-image:
-        linear-gradient(45deg, #e8e8e8 25%, transparent 25%),
-        linear-gradient(-45deg, #e8e8e8 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, #e8e8e8 75%),
-        linear-gradient(-45deg, transparent 75%, #e8e8e8 75%);
-    background-size: 7px 7px;
-    background-position: 0 0, 0 3.5px, 3.5px -3.5px, -3.5px 0;
+    /* [FIX] デフォルトはチェッカーボードなし（フォルダ・空アイコン用） */
+    background: transparent;
 }
 
 /* ダークテーマ用チェッカーボード */
@@ -690,6 +687,17 @@ button:active {
     object-fit: contain;
 }
 
+.sub-layers::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--line);
+    pointer-events: none;
+}
+
 /* Layer name input */
 .layer-name-input {
     flex: 1;
@@ -707,6 +715,27 @@ button:active {
     text-overflow: ellipsis;
     white-space: nowrap;
     transition: background var(--t);
+}
+
+.layer-preview-thumbnail:has(img) {
+    background-color: #fff;
+    background-image:
+        linear-gradient(45deg, #e8e8e8 25%, transparent 25%),
+        linear-gradient(-45deg, #e8e8e8 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #e8e8e8 75%),
+        linear-gradient(-45deg, transparent 75%, #e8e8e8 75%);
+    background-size: 7px 7px;
+    background-position: 0 0, 0 3.5px, 3.5px -3.5px, -3.5px 0;
+}
+ 
+.theme-black .layer-preview-thumbnail:has(img),
+.theme-grey .layer-preview-thumbnail:has(img) {
+    background-color: #1a1a1a;
+    background-image:
+        linear-gradient(45deg, #222 25%, transparent 25%),
+        linear-gradient(-45deg, #222 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #222 75%),
+        linear-gradient(-45deg, transparent 75%, #222 75%);
 }
 
 .layer-name-input:focus {
