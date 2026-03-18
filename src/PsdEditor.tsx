@@ -3,7 +3,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { readPsd, writePsd, Psd } from 'ag-psd';
+import { writePsd, Psd } from 'ag-psd';
 import {
     FolderOpen, Save, Layers,
     Image as ImageIcon,
@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import './PsdEditor.css';
 
-import { getLayersAtPath, cacheDataUrls, updateLayerByPath, collectSearchResults, throttle } from './utils/psdUtils';
+import { getLayersAtPath, attachThumbs, updateLayerByPath, collectSearchResults, throttle } from './utils/psdUtils';
 import { DropTargetInfo } from './types';
 import { Toast } from './components/Toast';
 import { SearchResultRow } from './components/SearchResultRow';
@@ -21,12 +21,14 @@ import { LayerItem } from './components/LayerItem';
 import { SettingsModal } from './components/SettingsModal';
 import { FileMenu } from './components/FileMenu';
 import { usePsdHistory } from './hooks/usePsdHistory';
+import { usePsdWorker } from './hooks/usePsdWorker';
 import { useZoomPan } from './hooks/useZoomPan';
 import { useSettings } from './hooks/useSettings';
 import { useRecentFiles } from './hooks/useRecentFiles';
 
 const PsdEditor = () => {
     const { psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
+    const { loadPsd } = usePsdWorker();
 
     // ── 設定 ──────────────────────────────────────────────────────────────────
     const { settings, updateSettings } = useSettings();
@@ -70,13 +72,11 @@ const PsdEditor = () => {
         const el = scrollRef.current;
         if (!el) return;
 
-        // clientWidth が既に確定していればすぐセンタリング
         if (el.clientWidth > 0) {
             centerPsd();
             return;
         }
 
-        // まだ 0 の場合は ResizeObserver で幅が確定するのを待つ
         const ro = new ResizeObserver(() => {
             if (el.clientWidth > 0) {
                 ro.disconnect();
@@ -174,19 +174,27 @@ const PsdEditor = () => {
         setIsLoading(true);
         isFirstLoadRef.current = true;
         try {
+            // ① ファイル読み込み（メインスレッド）
             const data = await readFile(path);
-            const parsedPsd = readPsd(data, { skipLayerImageData: false, skipCompositeImageData: false });
-            if (parsedPsd.children) {
-                parsedPsd.children = normalizeRadioGroups(parsedPsd.children);
-                cacheDataUrls(parsedPsd.children);
-            }
-            setPsd(parsedPsd);
+
+            // ② Worker に転送して PSD デコード + サムネイル生成（ゼロコピー）
+            const result = await loadPsd(data.buffer);
+
+            // ③ PSD ツリーをすぐ setPsd → プレビュー・レイヤーリストが即表示
+            setPsd(result.psd);
             addRecentFile(path);
+
+            // ④ _thumb / _bitmap を注入した新しい Psd で再セット
+            //    attachThumbs がイミュータブルに新オブジェクトを返すので
+            //    React.memo のキャッシュが正しく無効化されサムネが描画される
+            if (result.layers.length > 0) {
+                setPsd(attachThumbs(result.psd, result.layers));
+            }
         } catch (err) {
             showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
         }
         setIsLoading(false);
-    }, [normalizeRadioGroups, setPsd]);
+    }, [loadPsd, setPsd, addRecentFile]);
 
     useEffect(() => {
         const unlistenPromises = Promise.all([
@@ -218,19 +226,16 @@ const PsdEditor = () => {
                 if (window.getSelection()?.toString().length) return;
                 e.preventDefault(); handleCopyCanvas();
             }
-            // F11 で全画面トグル
             if (e.key === 'F11') {
                 e.preventDefault();
                 handleToggleFullscreen();
                 return;
             }
-            // Ctrl+O でファイルを開く
             if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 handleOpenFile();
                 return;
             }
-            // Ctrl+, で設定を開く
             if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 setShowSettings(true);
@@ -295,7 +300,6 @@ const PsdEditor = () => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
         const newPsd = { ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] };
-        if (newPsd.children) cacheDataUrls(newPsd.children);
         commitPsd(newPsd);
     }, [commitPsd, psdRef]);
 
@@ -303,7 +307,6 @@ const PsdEditor = () => {
         if (!psdRef.current) return;
         const cur = psdRef.current;
         const newPsd = { ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] };
-        if (newPsd.children) cacheDataUrls(newPsd.children);
         commitPsd(newPsd);
     }, [commitPsd, psdRef]);
 
@@ -397,15 +400,15 @@ const PsdEditor = () => {
             setDropTarget(null);
         }, 32);
 
+        const cleanup = () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+
         const onMouseMove = (ev: MouseEvent) => {
             if (!dragStateRef.current) return;
             if (Math.abs(ev.clientY - dragStateRef.current.startY) > 3) dragStateRef.current.moved = true;
             throttledMove(ev);
-        };
-
-        const cleanup = () => {
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
         };
 
         const onMouseUp = (ev: MouseEvent) => {
@@ -471,18 +474,23 @@ const PsdEditor = () => {
                 if (layer.hidden) continue;
                 const name = layer.name || '';
                 if (flipEnabled && hasFlipSuffix(name)) {
-                    // このflipレイヤーが実際に代替として使われている場合のみスキップ
-                    // （使われていない場合＝flipSuffixが一致しない場合は普通に描画）
                     const suffix = getFlipSuffix().toLowerCase();
                     if (suffix && name.toLowerCase().endsWith(suffix)) continue;
                 }
                 const effectiveLayer = flipVariantMap.get(name.toLowerCase()) ?? layer;
                 if (effectiveLayer.children) drawLayers(effectiveLayer.children);
-                else if (effectiveLayer.canvas) ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                else if (effectiveLayer._bitmap) {
+                    // Worker 化後は _bitmap（ImageBitmap）で描画
+                    ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                } else if (effectiveLayer.canvas) {
+                    // フォールバック: undo スナップショット等で _bitmap がない場合
+                    ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                }
             }
         };
 
         if (currentPsd.children && currentPsd.children.length > 0) drawLayers(currentPsd.children as any[]);
+        else if ((currentPsd as any)._bitmap) ctx.drawImage((currentPsd as any)._bitmap, 0, 0);
         else if (currentPsd.canvas) ctx.drawImage(currentPsd.canvas, 0, 0);
         ctx.restore();
 
@@ -528,7 +536,6 @@ const PsdEditor = () => {
                     <div className="title-bar-brand" data-tauri-drag-region>
                         <ImageIcon size={14} /><span>PSD STUDIO</span>
                     </div>
-                    {/* ファイルメニュー */}
                     <FileMenu
                         recentFiles={recentFiles}
                         onOpen={handleOpenFile}
@@ -546,8 +553,6 @@ const PsdEditor = () => {
 
             <header className="editor-header">
                 <div className="brand"><Layers size={20} className="text-accent" /><h1>{L.workspace}</h1></div>
-
-                {/* テーマスイッチャーは設定モーダルに移動。ここは削除 */}
 
                 {psd && (
                     <div className="zoom-controls">
@@ -586,10 +591,10 @@ const PsdEditor = () => {
                     </div>
                 )}
                 <div className="btn-group" style={{ marginLeft: psd ? undefined : 'auto' }}>
-                    {/* 設定ボタン */}
                     <button
                         onClick={() => setShowSettings(true)}
-                        title={`${L.settings} (Ctrl+,)`}                        className="btn-settings"
+                        title={`${L.settings} (Ctrl+,)`}
+                        className="btn-settings"
                     >
                         <Settings size={16} />
                     </button>
@@ -750,7 +755,6 @@ const PsdEditor = () => {
                 </div>
             )}
 
-            {/* ── 設定モーダル ── */}
             {showSettings && (
                 <SettingsModal
                     settings={settings}

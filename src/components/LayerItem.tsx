@@ -40,12 +40,16 @@ export const LayerItem = memo(({
     const isDropAfter = dropTarget?.path.join('-') === key && dropTarget.position === 'after';
     const isDropInside = dropTarget?.path.join('-') === key && dropTarget.position === 'inside';
 
-    const handleVisibilityClick = useCallback(() => {
+    const handleVisibilityClick = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
         if (isLocked) return;
         if (isRadio) onRadioSelect(path, siblings); else onToggle(path);
     }, [isLocked, isRadio, onRadioSelect, onToggle, path, siblings]);
 
-    const handleExpandClick = useCallback(() => onToggleExpand(key), [onToggleExpand, key]);
+    const handleExpandClick = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        onToggleExpand(key);
+    }, [onToggleExpand, key]);
 
     const handleRename = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const prefix = isRadio ? '*' : isLocked ? '!' : '';
@@ -88,7 +92,11 @@ export const LayerItem = memo(({
                         <Eye size={16} className="text-accent" style={{ opacity: 0.4 }} />
                     </span>
                 )}
-                <LayerThumbnail dataUrl={layer._dataUrl} hasChildren={hasChildren} />
+                <LayerThumbnail
+                    dataUrl={layer._dataUrl}
+                    bitmap={layer._bitmap}
+                    hasChildren={hasChildren}
+                />
                 <input
                     type="text" className="layer-name-input"
                     value={displayName} onChange={handleRename}

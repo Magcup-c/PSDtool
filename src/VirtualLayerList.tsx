@@ -122,7 +122,8 @@ const LayerRow = memo(({
     const isLocked = lockedEnabled && name.startsWith('!');
     const displayName = (isRadio || isLocked) ? name.slice(1) : name;
 
-    const handleVisibilityClick = useCallback(() => {
+    const handleVisibilityClick = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
         if (isLocked) return;
         if (isRadio) onRadioSelect(path, siblings);
         else onToggle(path);
@@ -132,6 +133,11 @@ const LayerRow = memo(({
         const prefix = isRadio ? '*' : isLocked ? '!' : '';
         onRename(path, prefix + e.target.value);
     }, [isRadio, isLocked, path, onRename]);
+
+    const handleToggleOpen = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        onToggleOpen(key);
+    }, [onToggleOpen, key]);
 
     return (
         <div
@@ -161,7 +167,7 @@ const LayerRow = memo(({
                 {hasChildren ? (
                     <button
                         className="toggle-expand"
-                        onClick={() => onToggleOpen(key)}
+                        onClick={handleToggleOpen}
                         style={{ flexShrink: 0 }}
                     >
                         {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
