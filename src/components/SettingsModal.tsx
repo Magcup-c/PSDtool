@@ -74,8 +74,6 @@ const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.5, 2];
 
 export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProps) => {
     const [local, setLocal] = useState<AppSettings>({
-        syncThemeWithOS: false,
-        syncLangWithOS: false,
         ...settings,
     });
     const t = T[local.language];
