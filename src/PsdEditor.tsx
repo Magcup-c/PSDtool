@@ -3,40 +3,78 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { writePsd, Psd } from 'ag-psd';
-import {
-    FolderOpen, Save, Layers,
-    Image as ImageIcon,
-    Monitor, ZoomIn, ZoomOut, Maximize, Maximize2, Minimize, X, Minus, Square, Download, FlipHorizontal2,
-    FlipVertical2, Asterisk, Pin, Replace, ChevronsDownUp,
-    ChevronsUpDown, Plus, FolderPlus, Search, Settings,
-} from 'lucide-react';
+import { writePsd } from 'ag-psd';
+import { invoke } from '@tauri-apps/api/core';
 import './PsdEditor.css';
+import { Image as ImageIcon } from 'lucide-react';
 
-import { getLayersAtPath, attachThumbs, updateLayerByPath, collectSearchResults, throttle } from './utils/psdUtils';
-import { DropTargetInfo } from './types';
+import { attachThumbs, updateLayerByPath, collectSearchResults, throttle } from './utils/psdUtils';
 import { Toast } from './components/Toast';
-import { SearchResultRow } from './components/SearchResultRow';
-import { LayerItem } from './components/LayerItem';
 import { SettingsModal } from './components/SettingsModal';
-import { FileMenu } from './components/FileMenu';
 import { usePsdHistory } from './hooks/usePsdHistory';
 import { usePsdWorker } from './hooks/usePsdWorker';
 import { useZoomPan } from './hooks/useZoomPan';
 import { useSettings } from './hooks/useSettings';
 import { useRecentFiles } from './hooks/useRecentFiles';
+import { useLayerFavorites, LayerFavorite } from './hooks/useLayerFavorites';
+
+// Simplified imports for sub-components
+import { EditorHeader } from './components/editor/EditorHeader';
+import { LayerPanel } from './components/editor/LayerPanel';
+import { PreviewArea } from './components/editor/PreviewArea';
+import { FavoriteModal } from './components/editor/FavoriteModal';
+
+function captureLayerState(layers: any[]): any[] {
+    return layers.map(layer => ({
+        hidden: !!layer.hidden,
+        children: layer.children?.length ? captureLayerState(layer.children) : undefined,
+    }));
+}
+
+function applyLayerState(layers: any[], state: any[] | undefined): any[] {
+    return layers.map((layer, idx) => {
+        const node = state?.[idx];
+        const isLocked = (layer.name || '').startsWith('!');
+        const next: any = { ...layer };
+        if (node && typeof node.hidden === 'boolean' && !isLocked) {
+            next.hidden = node.hidden;
+        }
+        if (layer.children?.length) {
+            next.children = applyLayerState(layer.children, node?.children);
+        }
+        return next;
+    });
+}
+
+function formatFavoriteTime(ts: number, lang: 'ja' | 'en') {
+    try {
+        return new Date(ts).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US', {
+            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+        });
+    } catch { return ''; }
+}
 
 const PsdEditor = () => {
-    const { psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo, normalizeRadioGroups, toggleRadioLayer } = usePsdHistory(null);
+    const { 
+        psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo, 
+        normalizeRadioGroups, toggleRadioLayer, resetHistory 
+    } = usePsdHistory(null);
     const { loadPsd } = usePsdWorker();
-
     const { settings, updateSettings } = useSettings();
     const [showSettings, setShowSettings] = useState(false);
-
     const { recentFiles, addRecentFile, clearRecentFiles } = useRecentFiles(settings.maxRecentFiles ?? 10);
+    const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+    const { favorites, saveFavorite, deleteFavorite, updateFavoriteName, moveFavoriteTo } = useLayerFavorites(currentFilePath);
+    const [favoriteDialog, setFavoriteDialog] = useState<{ mode: 'create' | 'rename'; id?: string; value: string } | null>(null);
+    const favoriteInputRef = useRef<HTMLInputElement>(null);
+    const favoriteListRef = useRef<HTMLUListElement>(null);
+    const favoriteRectsRef = useRef<{ id: string; rect: DOMRect }[]>([]);
+    const [favoriteDrop, setFavoriteDrop] = useState<{ id: string; position: 'before' | 'after' } | null>(null);
 
     const [isLoading, setIsLoading] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
+    const [sidebarWidth, setSidebarWidth] = useState(240);
+    const isResizingRef = useRef(false);
     const [flipX, setFlipX] = useState(false);
     const [flipY, setFlipY] = useState(false);
     const [radioEnabled, setRadioEnabled] = useState(true);
@@ -45,7 +83,7 @@ const PsdEditor = () => {
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
     const [closedKeys, setClosedKeys] = useState<Set<string>>(new Set());
     const [draggingPath, setDraggingPath] = useState<number[] | null>(null);
-    const [dropTarget, setDropTarget] = useState<DropTargetInfo | null>(null);
+    const [dropTarget, setDropTarget] = useState<any | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -54,6 +92,7 @@ const PsdEditor = () => {
     const layerScrollRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const dragStateRef = useRef<{ path: number[]; startY: number; moved: boolean } | null>(null);
+    const favoriteDragStateRef = useRef<{ id: string; startY: number; moved: boolean } | null>(null);
 
     const drawDirtyRef = useRef(false);
     const drawRafRef = useRef<number | null>(null);
@@ -65,36 +104,22 @@ const PsdEditor = () => {
         if (!psd) return;
         if (!isFirstLoadRef.current) return;
         isFirstLoadRef.current = false;
-
         const el = scrollRef.current;
         if (!el) return;
-
-        if (el.clientWidth > 0) {
-            centerPsd();
-            return;
-        }
-
-        const ro = new ResizeObserver(() => {
-            if (el.clientWidth > 0) {
-                ro.disconnect();
-                centerPsd();
-            }
-        });
-        ro.observe(el);
-        return () => ro.disconnect();
-    }, [psd, centerPsd, scrollRef]);
+        let attempts = 0;
+        const tryCenter = () => {
+            attempts++;
+            if (el.clientWidth > 0 && el.clientHeight > 0) { centerPsd(); return; }
+            if (attempts < 10) requestAnimationFrame(tryCenter);
+        };
+        requestAnimationFrame(tryCenter);
+    }, [psd, centerPsd]);
 
     const appWindow = getCurrentWindow();
-    const handleMinimize = () => appWindow.minimize();
-    const handleMaximize = () => appWindow.toggleMaximize();
-    const handleClose = () => appWindow.close();
     const handleCloseNotification = useCallback(() => setNotification(null), []);
-
     const [isFullscreen, setIsFullscreen] = useState(false);
     const handleToggleFullscreen = useCallback(async () => {
-        const next = !isFullscreen;
-        await appWindow.setFullscreen(next);
-        setIsFullscreen(next);
+        const next = !isFullscreen; await appWindow.setFullscreen(next); setIsFullscreen(next);
     }, [appWindow, isFullscreen]);
 
     const [zoomInputActive, setZoomInputActive] = useState(false);
@@ -102,24 +127,19 @@ const PsdEditor = () => {
     const zoomInputRef = useRef<HTMLInputElement>(null);
 
     const handleZoomInputFocus = useCallback(() => {
-        setZoomInputValue(String(Math.round(zoom * 100)));
-        setZoomInputActive(true);
+        setZoomInputValue(String(Math.round(zoom * 100))); setZoomInputActive(true);
         setTimeout(() => zoomInputRef.current?.select(), 0);
     }, [zoom]);
 
     const handleZoomInputCommit = useCallback(() => {
         setZoomInputActive(false);
         const parsed = parseInt(zoomInputValue, 10);
-        if (!isNaN(parsed) && parsed > 0) {
-            setZoomTo(Math.min(500, Math.max(10, parsed)) / 100);
-        }
+        if (!isNaN(parsed) && parsed > 0) setZoomTo(Math.min(500, Math.max(10, parsed)) / 100);
     }, [zoomInputValue, setZoomTo]);
 
     const handleToggleExpand = useCallback((key: string) => {
         setClosedKeys(prev => {
-            const next = new Set(prev);
-            if (next.has(key)) next.delete(key); else next.add(key);
-            return next;
+            const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next;
         });
     }, []);
 
@@ -127,8 +147,7 @@ const PsdEditor = () => {
         const keys: string[] = [];
         layers.forEach((layer, idx) => {
             if (layer.children?.length > 0) {
-                const path = [...parentPath, idx];
-                keys.push(path.join('-'));
+                const path = [...parentPath, idx]; keys.push(path.join('-'));
                 keys.push(...collectGroupKeys(layer.children, path));
             }
         });
@@ -137,24 +156,63 @@ const PsdEditor = () => {
 
     const handleExpandAll = useCallback(() => setClosedKeys(new Set()), []);
     const handleCollapseAll = useCallback(() => {
-        if (!psd?.children) return;
-        setClosedKeys(new Set(collectGroupKeys(psd.children)));
+        if (!psd?.children) return; setClosedKeys(new Set(collectGroupKeys(psd.children)));
     }, [psd, collectGroupKeys]);
 
-    // [FIX] isChildClosed は不要になったので削除
-
     const searchResults = useMemo(() => {
-        const q = searchQuery.trim();
-        if (!q || !psd?.children) return null;
+        const q = searchQuery.trim(); if (!q || !psd?.children) return null;
         return collectSearchResults(psd.children, q);
     }, [searchQuery, psd]);
 
-    const showToast = (message: string, type: 'success' | 'error' = 'success') =>
-        setNotification({ message, type });
+    const lang = settings.language;
+    const L = useMemo(() => ({
+        open: lang === 'ja' ? '開く' : 'Open',
+        png: 'PNG',
+        savePsd: lang === 'ja' ? '保存' : 'Save PSD',
+        workspace: lang === 'ja' ? 'Studio' : 'Studio',
+        layers: lang === 'ja' ? 'Layers' : 'Layers',
+        addLayer: lang === 'ja' ? 'レイヤー追加' : 'Add layer',
+        addGroup: lang === 'ja' ? 'グループ追加' : 'Add group',
+        expandAll: lang === 'ja' ? '全展開' : 'Expand all',
+        collapseAll: lang === 'ja' ? '全折りたたみ' : 'Collapse all',
+        searchPlaceholder: lang === 'ja' ? 'レイヤーを検索' : 'Search layers...',
+        radio: 'Radio', fixed: lang === 'ja' ? 'Fixed' : 'Fixed', flip: 'Flip',
+        dropPsd: lang === 'ja' ? 'PSDをドロップ' : 'Drop a PSD file here',
+        noLayers: lang === 'ja' ? '見つかりません' : 'No layers found',
+        loading: lang === 'ja' ? '読み込み中…' : 'Analyzing workspace…',
+        dragDrop: lang === 'ja' ? 'PSDファイルをドロップ' : 'Drop PSD file here',
+        dragRelease: lang === 'ja' ? 'ここでドロップして開く' : 'Release to open',
+        settings: lang === 'ja' ? '設定' : 'Settings',
+        favorites: lang === 'ja' ? 'お気に入り' : 'Favorites',
+        saveState: lang === 'ja' ? '状態を保存' : 'Save State',
+        noFavorites: lang === 'ja' ? '未登録' : 'No favorites yet',
+        applyState: lang === 'ja' ? 'この状態を適用' : 'Apply this state',
+        deleteState: lang === 'ja' ? '削除' : 'Delete',
+        promptName: lang === 'ja' ? 'お気に入り名を入力してください' : 'Enter a name for this favorite',
+        renameState: lang === 'ja' ? '名前を変更' : 'Rename',
+        promptRename: lang === 'ja' ? '新しい名前を入力してください' : 'Enter a new name',
+        moveUp: lang === 'ja' ? '上へ' : 'Move up',
+        moveDown: lang === 'ja' ? '下へ' : 'Move down',
+        dragHandle: lang === 'ja' ? 'ドラッグで並べ替え' : 'Drag to reorder',
+        saved: lang === 'ja' ? 'お気に入りを保存しました' : 'Favorite saved',
+        applied: lang === 'ja' ? 'お気に入りを適用しました' : 'Favorite applied',
+        cancel: lang === 'ja' ? 'キャンセル' : 'Cancel',
+        ok: 'OK',
+        copied: lang === 'ja' ? 'クリップボードにコピーしました' : 'Copied to clipboard!',
+        copyFailed: lang === 'ja' ? 'コピーに失敗しました' : 'Copy failed',
+        loadFailed: lang === 'ja' ? '読み込みに失敗しました' : 'Failed to load PSD',
+        openFailed: lang === 'ja' ? 'ファイルを開けませんでした' : 'Failed to open file',
+        saveSuccess: lang === 'ja' ? '保存しました' : 'File saved successfully!',
+        saveFailed: lang === 'ja' ? '保存に失敗しました' : 'Failed to save file',
+        exportSuccess: lang === 'ja' ? 'エクスポートが完了しました' : 'PNG exported successfully!',
+        exportFailed: lang === 'ja' ? 'エクスポートに失敗しました' : 'Failed to export PNG',
+    }), [lang]);
+
+    const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
+        setNotification({ message, type }), []);
 
     const handleCopyCanvas = useCallback(async () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
+        const canvas = canvasRef.current; if (!canvas) return;
         try {
             await new Promise<void>((resolve, reject) => {
                 canvas.toBlob(async (blob) => {
@@ -162,36 +220,47 @@ const PsdEditor = () => {
                     try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); resolve(); }
                     catch (e) { reject(e); }
                 }, 'image/png');
-            });
-            showToast('Copied to clipboard!');
-        } catch (err) {
-            showToast(`Copy failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
-        }
-    }, []);
+            }); showToast(L.copied);
+        } catch (err) { showToast(`${L.copyFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
+    }, [showToast, L]);
 
     const loadPsdFromFilePath = useCallback(async (path: string) => {
-        setIsLoading(true);
-        isFirstLoadRef.current = true;
+        setIsLoading(true); isFirstLoadRef.current = true;
         try {
             const data = await readFile(path);
             const result = await loadPsd(data.buffer);
-            setPsd(result.psd);
-            addRecentFile(path);
-            if (result.layers.length > 0) {
-                setPsd(attachThumbs(result.psd, result.layers));
-            }
-        } catch (err) {
-            showToast(`Failed to load PSD: ${err instanceof Error ? err.message : String(err)}`, 'error');
-        }
+            const nextPsd = result.layers.length > 0 ? attachThumbs(result.psd, result.layers) : result.psd;
+            resetHistory(nextPsd);
+            addRecentFile(path); setCurrentFilePath(path);
+        } catch (err) { showToast(`${L.loadFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
         setIsLoading(false);
-    }, [loadPsd, setPsd, addRecentFile]);
+    }, [loadPsd, resetHistory, addRecentFile, showToast, L]);
+
+    useEffect(() => {
+        const checkArgs = async () => {
+            try {
+                const args: string[] = await invoke('get_launch_args');
+                const psdFile = args.slice(1).find(x => x.toLowerCase().endsWith('.psd'));
+                if (psdFile) loadPsdFromFilePath(psdFile);
+            } catch (e) { console.error('Failed to get launch args', e); }
+        };
+        checkArgs();
+    }, [loadPsdFromFilePath]);
+
+    useEffect(() => {
+        const unlistenPromise = listen<string[]>('open-file', (event) => {
+            const psdFile = event.payload.slice(1).find(x => x.toLowerCase().endsWith('.psd'));
+            if (psdFile) loadPsdFromFilePath(psdFile);
+            getCurrentWindow().setFocus();
+        });
+        return () => { unlistenPromise.then(u => u()); };
+    }, [loadPsdFromFilePath]);
 
     useEffect(() => {
         const unlistenPromises = Promise.all([
             listen('tauri://drag-over', () => setIsDragging(true)),
             listen('tauri://drag-drop', (event: any) => {
-                setIsDragging(false);
-                const paths = event.payload.paths;
+                setIsDragging(false); const paths = event.payload.paths;
                 if (paths?.length > 0 && paths[0].toLowerCase().endsWith('.psd')) loadPsdFromFilePath(paths[0]);
             }),
             listen('tauri://drag-leave', () => setIsDragging(false)),
@@ -203,33 +272,54 @@ const PsdEditor = () => {
         try {
             const selected = await open({ multiple: false, filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
             if (selected && typeof selected === 'string') loadPsdFromFilePath(selected);
-        } catch (err) { showToast(`Failed to open file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
-    }, [loadPsdFromFilePath]);
+        } catch (err) { showToast(`${L.openFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
+    }, [loadPsdFromFilePath, showToast, L]);
 
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
-            const tag = (e.target as HTMLElement).tagName;
-            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            const tag = (e.target as HTMLElement).tagName; if (tag === 'INPUT' || tag === 'TEXTAREA') return;
             if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); handleUndo(); return; }
             if ((e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) || (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey)) { e.preventDefault(); handleRedo(); return; }
             if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey)) {
-                if (window.getSelection()?.toString().length) return;
-                e.preventDefault(); handleCopyCanvas();
+                if (window.getSelection()?.toString().length) return; e.preventDefault(); handleCopyCanvas();
             }
             if (e.key === 'F11') { e.preventDefault(); handleToggleFullscreen(); return; }
             if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleOpenFile(); return; }
-            if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setShowSettings(true); }
+            if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setShowSettings(true); return; }
+            
+            // Zoom shortcuts
+            if ((e.key === '+' || e.key === ';' || e.key === '=') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(0.1); return; }
+            if (e.key === '-' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(-0.1); return; }
+            if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); centerPsd(); return; }
         };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
-    }, [handleUndo, handleRedo, handleCopyCanvas, handleOpenFile, handleToggleFullscreen]);
+        window.addEventListener('keydown', onKeyDown); return () => window.removeEventListener('keydown', onKeyDown);
+    }, [handleUndo, handleRedo, handleCopyCanvas, handleOpenFile, handleToggleFullscreen, handleZoom, centerPsd]);
+
+    const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        isResizingRef.current = true;
+        document.body.style.cursor = 'col-resize';
+        const onMouseMove = (moveEvent: MouseEvent) => {
+            if (!isResizingRef.current) return;
+            const newWidth = Math.max(200, Math.min(600, moveEvent.clientX));
+            setSidebarWidth(newWidth);
+        };
+        const onMouseUp = () => {
+            isResizingRef.current = false;
+            document.body.style.cursor = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }, []);
 
     const handleSaveFile = async () => {
         if (!psd) return;
         try {
-            const selected = await save({ title: 'Save PSD File', filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
-            if (selected) { await writeFile(selected, new Uint8Array(writePsd(psd) as ArrayBuffer)); showToast('File saved successfully!'); }
-        } catch (err) { showToast(`Failed to save file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
+            const selected = await save({ title: lang === 'ja' ? 'PSDファイルを保存' : 'Save PSD File', filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
+            if (selected) { await writeFile(selected, new Uint8Array(writePsd(psd) as ArrayBuffer)); showToast(L.saveSuccess); }
+        } catch (err) { showToast(`${L.saveFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
     const handleExportPng = async () => {
@@ -240,16 +330,12 @@ const PsdEditor = () => {
                 await new Promise<void>((resolve, reject) => {
                     canvasRef.current!.toBlob(async (blob) => {
                         if (!blob) { reject(new Error('toBlob failed')); return; }
-                        try {
-                            const arrayBuffer = await blob.arrayBuffer();
-                            await writeFile(selected, new Uint8Array(arrayBuffer));
-                            resolve();
-                        } catch (e) { reject(e); }
+                        try { const arrayBuffer = await blob.arrayBuffer(); await writeFile(selected, new Uint8Array(arrayBuffer)); resolve(); }
+                        catch (e) { reject(e); }
                     }, 'image/png');
-                });
-                showToast('PNG exported successfully!');
+                }); showToast(L.exportSuccess);
             }
-        } catch (err) { showToast(`Failed to export PNG: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
+        } catch (err) { showToast(`${L.exportFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
     const toggleLayerVisibility = useCallback((path: number[]) => {
@@ -257,72 +343,51 @@ const PsdEditor = () => {
         commitPsd(updateLayerByPath(psdRef.current, path, (l) => ({ ...l, hidden: !l.hidden })));
     }, [commitPsd, psdRef]);
 
-    const renameSessionRef = useRef(false);
-    const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+    const renameSessionRef = useRef(false); const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const renameLayer = useCallback((path: number[], newName: string) => {
         if (!psdRef.current) return;
         const updated = updateLayerByPath(psdRef.current, path, (l) => ({ ...l, name: newName }));
-        if (!renameSessionRef.current) {
-            renameSessionRef.current = true;
-            pushSnapshot(psdRef.current);
-        }
-        setPsd(updated);
-        if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-        renameTimerRef.current = setTimeout(() => {
-            renameTimerRef.current = null;
-            renameSessionRef.current = false;
-        }, 600);
+        if (!renameSessionRef.current) { renameSessionRef.current = true; pushSnapshot(psdRef.current); }
+        setPsd(updated); if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
+        renameTimerRef.current = setTimeout(() => { renameTimerRef.current = null; renameSessionRef.current = false; }, 600);
     }, [psdRef, setPsd, pushSnapshot]);
 
     const handleAddLayer = useCallback(() => {
-        if (!psdRef.current) return;
-        const cur = psdRef.current;
+        if (!psdRef.current) return; const cur = psdRef.current;
         commitPsd({ ...cur, children: [{ name: 'New Layer', hidden: false }, ...(cur.children || [])] });
     }, [commitPsd, psdRef]);
 
     const handleAddGroup = useCallback(() => {
-        if (!psdRef.current) return;
-        const cur = psdRef.current;
+        if (!psdRef.current) return; const cur = psdRef.current;
         commitPsd({ ...cur, children: [{ name: 'New Group', hidden: false, children: [] }, ...(cur.children || [])] });
     }, [commitPsd, psdRef]);
 
     const handleDeleteLayer = useCallback((path: number[]) => {
         if (!psdRef.current) return;
-        const deleteAt = (p: Psd, pathArgs: number[]): Psd => {
-            const newPsd = { ...p, children: [...(p.children || [])] };
-            let arr = newPsd.children;
-            const pathCopy = [...pathArgs];
-            const lastIdx = pathCopy.pop()!;
+        const deleteAt = (p: any, pathArgs: number[]): any => {
+            const newPsd = { ...p, children: [...(p.children || [])] }; let arr = newPsd.children;
+            const pathCopy = [...pathArgs]; const lastIdx = pathCopy.pop()!;
             for (const idx of pathCopy) { arr[idx] = { ...arr[idx], children: [...(arr[idx].children || [])] }; arr = arr[idx].children!; }
-            arr.splice(lastIdx, 1);
-            return newPsd;
-        };
-        commitPsd(deleteAt(psdRef.current, path));
+            arr.splice(lastIdx, 1); return newPsd;
+        }; commitPsd(deleteAt(psdRef.current, path));
     }, [commitPsd, psdRef]);
 
-    const itemRectsRef = useRef<{ el: HTMLElement; rect: DOMRect; path: number[]; isGroup: boolean }[]>([]);
-
+    const itemRectsRef = useRef<{ rect: DOMRect; path: number[]; isGroup: boolean }[]>([]);
     const cacheItemRects = useCallback(() => {
-        const scroll = layerScrollRef.current;
-        if (!scroll) return;
+        const scroll = layerScrollRef.current; if (!scroll) return;
         const items = Array.from(scroll.querySelectorAll<HTMLElement>('[data-path]'));
         itemRectsRef.current = items.map(el => ({
-            el,
             rect: el.getBoundingClientRect(),
             path: (el.getAttribute('data-path') ?? '').split('-').map(Number),
             isGroup: el.getAttribute('data-group') === 'true',
         }));
     }, []);
 
-    const findDropTargetFromCache = useCallback((clientY: number): DropTargetInfo | null => {
-        const items = itemRectsRef.current;
-        if (!items.length) return null;
-        let best: (DropTargetInfo & { dist: number }) | null = null;
+    const findDropTargetFromCache = useCallback((clientY: number) => {
+        const items = itemRectsRef.current; if (!items.length) return null;
+        let best: any = null;
         for (const { rect, path, isGroup } of items) {
-            const zone = rect.height * 0.25;
-            let position: 'before' | 'after' | 'inside';
-            let dist: number;
+            const zone = rect.height * 0.25; let position: any, dist: number;
             if (clientY < rect.top + zone) { position = 'before'; dist = Math.abs(clientY - rect.top); }
             else if (clientY > rect.bottom - zone) { position = 'after'; dist = Math.abs(clientY - rect.bottom); }
             else if (isGroup) { position = 'inside'; dist = Math.abs(clientY - (rect.top + rect.height / 2)); }
@@ -332,399 +397,210 @@ const PsdEditor = () => {
         return best ? { path: best.path, position: best.position } : null;
     }, []);
 
-    const applyDrop = useCallback((srcPath: number[], dst: DropTargetInfo) => {
-        const current = psdRef.current;
-        if (!current?.children) return;
-        const cloneTree = (layers: any[]): any[] => layers.map(l => ({ ...l, children: l.children ? cloneTree(l.children) : undefined }));
-        const newChildren = cloneTree(current.children);
-        const srcParentPath = srcPath.slice(0, -1);
-        const srcIdx = srcPath[srcPath.length - 1];
-        const srcArr = srcParentPath.length === 0 ? newChildren : getLayersAtPath(newChildren, srcParentPath);
-        const [srcLayer] = srcArr.splice(srcIdx, 1);
-        let dstPath = [...dst.path];
-        const dstParentPath = dstPath.slice(0, -1);
-        const isSameParent = srcParentPath.join('-') === dstParentPath.join('-');
-        if (isSameParent && srcIdx < dstPath[dstPath.length - 1]) dstPath[dstPath.length - 1]--;
-        if (dst.position === 'inside') {
-            const dstGroup = dstPath.length === 0
-                ? { children: newChildren }
-                : getLayersAtPath(newChildren, dstPath.slice(0, -1))[dstPath[dstPath.length - 1]] as any;
-            if (!dstGroup.children) dstGroup.children = [];
-            dstGroup.children.push(srcLayer);
-        } else {
-            const dstArr = dstParentPath.length === 0 ? newChildren : getLayersAtPath(newChildren, dstParentPath);
-            let insertIdx = dstPath[dstPath.length - 1];
-            if (dst.position === 'after') insertIdx++;
-            dstArr.splice(insertIdx, 0, srcLayer);
-        }
-        commitPsd({ ...current, children: newChildren });
-    }, [commitPsd, psdRef]);
-
     const handleLayerDragStart = useCallback((e: React.MouseEvent, path: number[]) => {
         e.preventDefault(); e.stopPropagation();
         dragStateRef.current = { path, startY: e.clientY, moved: false };
-        setDraggingPath(path);
-        cacheItemRects();
-
+        setDraggingPath(path); cacheItemRects();
         const throttledMove = throttle((ev: MouseEvent) => {
-            if (!dragStateRef.current) return;
-            const target = findDropTargetFromCache(ev.clientY);
+            if (!dragStateRef.current) return; const target = findDropTargetFromCache(ev.clientY);
             if (target) {
-                const dragKey = dragStateRef.current.path.join('-');
-                const targetKey = target.path.join('-');
+                const dragKey = dragStateRef.current.path.join('-'); const targetKey = target.path.join('-');
                 if (targetKey !== dragKey && !targetKey.startsWith(dragKey + '-')) { setDropTarget(target); return; }
-            }
-            setDropTarget(null);
+            } setDropTarget(null);
         }, 32);
-
-        const cleanup = () => {
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
-        };
-
         const onMouseMove = (ev: MouseEvent) => {
             if (!dragStateRef.current) return;
-            if (Math.abs(ev.clientY - dragStateRef.current.startY) > 3) dragStateRef.current.moved = true;
-            throttledMove(ev);
+            if (Math.abs(ev.clientY - dragStateRef.current.startY) > 3) dragStateRef.current.moved = true; throttledMove(ev);
         };
-
         const onMouseUp = (ev: MouseEvent) => {
-            cleanup();
-            const state = dragStateRef.current;
-            dragStateRef.current = null;
+            const state = dragStateRef.current; dragStateRef.current = null;
             setDraggingPath(null); setDropTarget(null);
-            if (!state?.moved) return;
-            const target = findDropTargetFromCache(ev.clientY);
+            window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp);
+            if (!state?.moved) return; const target = findDropTargetFromCache(ev.clientY);
             if (!target) return;
-            const dragKey = state.path.join('-');
-            const targetKey = target.path.join('-');
+            const dragKey = state.path.join('-'); const targetKey = target.path.join('-');
             if (targetKey === dragKey || targetKey.startsWith(dragKey + '-')) return;
-            applyDrop(state.path, target);
+            // applyDrop inline
+            const current = psdRef.current; if (!current?.children) return;
+            const cloneTree = (layers: any[]): any[] => layers.map(l => ({ ...l, children: l.children ? cloneTree(l.children) : undefined }));
+            const newChildren = cloneTree(current.children);
+            const [srcLayer] = (state.path.slice(0, -1).length === 0 ? newChildren : (function(c, p){let r=c;for(const i of p)r=r[i].children;return r;})(newChildren, state.path.slice(0, -1))).splice(state.path[state.path.length-1], 1);
+            let dstPath = [...target.path]; const dstParentPath = dstPath.slice(0, -1);
+            if (state.path.slice(0, -1).join('-') === dstParentPath.join('-') && state.path[state.path.length-1] < dstPath[dstPath.length-1]) dstPath[dstPath.length-1]--;
+            if (target.position === 'inside') {
+                const dstGroup = dstPath.length === 0 ? { children: newChildren } : (function(c, p){let r=c;for(const i of p)r=r[i].children;return r;})(newChildren, dstPath.slice(0, -1))[dstPath[dstPath.length-1]] as any;
+                if (!dstGroup.children) dstGroup.children = []; dstGroup.children.push(srcLayer);
+            } else {
+                const dstArr = dstParentPath.length === 0 ? newChildren : (function(c, p){let r=c;for(const i of p)r=r[i].children;return r;})(newChildren, dstParentPath);
+                let idx = dstPath[dstPath.length-1]; if (target.position === 'after') idx++; dstArr.splice(idx, 0, srcLayer);
+            }
+            commitPsd({ ...current, children: newChildren });
         };
+        window.addEventListener('mousemove', onMouseMove); window.addEventListener('mouseup', onMouseUp);
+    }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd]);
 
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp);
-        return cleanup;
-    }, [cacheItemRects, findDropTargetFromCache, applyDrop]);
-
-    const getFlipSuffix = useCallback((): string => {
-        if (flipX && flipY) return ':flipxy';
-        if (flipX) return ':flipx';
-        if (flipY) return ':flipy';
-        return '';
+    const getFlipSuffix = useCallback(() => {
+        if (flipX && flipY) return ':flipxy'; if (flipX) return ':flipx'; if (flipY) return ':flipy'; return '';
     }, [flipX, flipY]);
-
-    const getBaseName = useCallback((name: string): string => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
-    const hasFlipSuffix = useCallback((name: string): boolean => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
+    const hasFlipSuffix = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
+    const getBaseName = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
 
     const drawCanvas = useCallback(() => {
-        const canvas = canvasRef.current;
-        const currentPsd = psdRef.current;
-        if (!canvas || !currentPsd) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        canvas.width = currentPsd.width;
-        canvas.height = currentPsd.height;
+        const canvas = canvasRef.current; const currentPsd = psdRef.current; if (!canvas || !currentPsd) return;
+        const ctx = canvas.getContext('2d'); if (!ctx) return;
+        canvas.width = currentPsd.width; canvas.height = currentPsd.height;
         ctx.clearRect(0, 0, currentPsd.width, currentPsd.height);
-
-        const currentFlipX = flipX, currentFlipY = flipY;
         const flipSuffix = flipEnabled ? getFlipSuffix() : '';
-
         ctx.save();
-        if (currentFlipX && currentFlipY) { ctx.translate(currentPsd.width, currentPsd.height); ctx.scale(-1, -1); }
-        else if (currentFlipX) { ctx.translate(currentPsd.width, 0); ctx.scale(-1, 1); }
-        else if (currentFlipY) { ctx.translate(0, currentPsd.height); ctx.scale(1, -1); }
-
-        const buildFlipVariantMap = (layers: any[]) => {
-            const map = new Map<string, any>();
-            if (!flipEnabled || !flipSuffix) return map;
-            for (const l of layers) {
-                const lowerName = (l.name || '').toLowerCase();
-                if (lowerName.endsWith(flipSuffix.toLowerCase())) map.set(getBaseName(l.name || '').toLowerCase(), l);
-            }
-            return map;
-        };
+        if (flipX && flipY) { ctx.translate(currentPsd.width, currentPsd.height); ctx.scale(-1, -1); }
+        else if (flipX) { ctx.translate(currentPsd.width, 0); ctx.scale(-1, 1); }
+        else if (flipY) { ctx.translate(0, currentPsd.height); ctx.scale(1, -1); }
         const drawLayers = (layers: any[]) => {
-            const flipVariantMap = buildFlipVariantMap(layers);
+            const flipMap = new Map();
+            if (flipEnabled && flipSuffix) { for (const l of layers) if ((l.name || '').toLowerCase().endsWith(flipSuffix.toLowerCase())) flipMap.set(getBaseName(l.name || '').toLowerCase(), l); }
             for (const layer of layers) {
-                if (layer.hidden) continue;
-                const name = layer.name || '';
-                if (flipEnabled && hasFlipSuffix(name)) {
-                    const suffix = getFlipSuffix().toLowerCase();
-                    if (suffix && name.toLowerCase().endsWith(suffix)) continue;
-                }
-                const effectiveLayer = flipVariantMap.get(name.toLowerCase()) ?? layer;
+                if (layer.hidden) continue; const name = layer.name || '';
+                if (flipEnabled && hasFlipSuffix(name) && getFlipSuffix() && name.toLowerCase().endsWith(getFlipSuffix().toLowerCase())) continue;
+                const effectiveLayer = flipMap.get(name.toLowerCase()) ?? layer;
                 if (effectiveLayer.children) drawLayers(effectiveLayer.children);
-                else if (effectiveLayer._bitmap) {
-                    ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
-                } else if (effectiveLayer.canvas) {
-                    ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
-                }
+                else if (effectiveLayer._bitmap) ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                else if (effectiveLayer.canvas) ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
             }
         };
-
-        if (currentPsd.children && currentPsd.children.length > 0) drawLayers(currentPsd.children as any[]);
+        if (currentPsd.children) drawLayers(currentPsd.children);
         else if ((currentPsd as any)._bitmap) ctx.drawImage((currentPsd as any)._bitmap, 0, 0);
-        else if (currentPsd.canvas) ctx.drawImage(currentPsd.canvas, 0, 0);
-        ctx.restore();
-
-        drawDirtyRef.current = false;
+        ctx.restore(); drawDirtyRef.current = false;
     }, [flipX, flipY, flipEnabled, getFlipSuffix, getBaseName, hasFlipSuffix, psdRef]);
 
     useEffect(() => {
-        if (!psd) return;
-        drawDirtyRef.current = true;
-        if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
+        if (!psd) return; drawDirtyRef.current = true; if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
         drawRafRef.current = requestAnimationFrame(() => { drawCanvas(); drawRafRef.current = null; });
         return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
     }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
 
-    const lang = settings.language;
-    const L = {
-        open:        lang === 'ja' ? '開く'        : 'Open',
-        png:         'PNG',
-        savePsd:     lang === 'ja' ? '保存'        : 'Save PSD',
-        workspace:   lang === 'ja' ? 'Studio'      : 'Studio',
-        layers:      lang === 'ja' ? 'Layers'      : 'Layers',
-        addLayer:    lang === 'ja' ? 'レイヤー追加' : 'Add layer',
-        addGroup:    lang === 'ja' ? 'グループ追加' : 'Add group',
-        expandAll:   lang === 'ja' ? '全展開'       : 'Expand all',
-        collapseAll: lang === 'ja' ? '全折りたたみ' : 'Collapse all',
-        searchPlaceholder: lang === 'ja' ? 'レイヤーを検索' : 'Search layers...',
-        radio:       'Radio',
-        fixed:       lang === 'ja' ? 'Fixed'       : 'Fixed',
-        flip:        'Flip',
-        dropPsd:     lang === 'ja' ? 'PSDをドロップ' : 'Drop a PSD file here',
-        noLayers:    lang === 'ja' ? '見つかりません' : 'No layers found',
-        loading:     lang === 'ja' ? '読み込み中…'  : 'Analyzing workspace…',
-        dragDrop:    lang === 'ja' ? 'ドロップして開く' : 'Ready to Import',
-        dragRelease: lang === 'ja' ? 'PSDファイルを離して読み込む' : 'Release to open your PSD',
-        settings:    lang === 'ja' ? '設定'        : 'Settings',
-    };
+    const handleApplyFavorite = useCallback((fav: LayerFavorite) => {
+        if (!psdRef.current) return; const current = psdRef.current;
+        const nextChildren = current.children ? applyLayerState(current.children, fav.state) : current.children;
+        commitPsd({ ...current, children: nextChildren }); setClosedKeys(new Set(fav.closedKeys ?? []));
+        if (fav.zoom) setZoomTo(fav.zoom); if (typeof fav.flipX === 'boolean') setFlipX(fav.flipX);
+        if (typeof fav.flipY === 'boolean') setFlipY(fav.flipY); if (typeof fav.radioEnabled === 'boolean') setRadioEnabled(fav.radioEnabled);
+        if (typeof fav.lockedEnabled === 'boolean') setLockedEnabled(fav.lockedEnabled); if (typeof fav.flipEnabled === 'boolean') setFlipEnabled(fav.flipEnabled);
+        showToast(L.applied);
+    }, [commitPsd, psdRef, showToast, L, setZoomTo]);
+
+    const openCreateFavorite = useCallback(() => {
+        if (!psdRef.current?.children) return;
+        setFavoriteDialog({ mode: 'create', value: `${L.favorites} ${favorites.length + 1}` });
+    }, [favorites.length, L, psdRef]);
+
+    const confirmFavoriteDialog = useCallback(() => {
+        if (!favoriteDialog) return; const name = favoriteDialog.value.trim(); if (!name) return;
+        if (favoriteDialog.mode === 'create') {
+            if (!psdRef.current?.children) return;
+            saveFavorite(name, captureLayerState(psdRef.current.children), Array.from(closedKeys), {
+                zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled,
+            }); showToast(L.saved);
+        } else if (favoriteDialog.mode === 'rename' && favoriteDialog.id) updateFavoriteName(favoriteDialog.id, name);
+        setFavoriteDialog(null);
+    }, [favoriteDialog, psdRef, saveFavorite, closedKeys, zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled, showToast, L, updateFavoriteName]);
+
+    const cacheFavoriteRects = useCallback(() => {
+        const root = favoriteListRef.current; if (!root) return;
+        const items = Array.from(root.querySelectorAll<HTMLElement>('[data-favorite-id]'));
+        favoriteRectsRef.current = items.map(el => ({ id: el.getAttribute('data-favorite-id') || '', rect: el.getBoundingClientRect() })).filter(x => x.id);
+    }, []);
+
+    const findFavoriteDropTarget = useCallback((clientY: number) => {
+        const items = favoriteRectsRef.current; if (!items.length) return null;
+        let best: any = null;
+        for (const { id, rect } of items) {
+            const mid = rect.top + rect.height / 2; const position = clientY < mid ? 'before' : 'after'; const dist = Math.abs(clientY - mid);
+            if (!best || dist < best.dist) best = { id, position, dist };
+        } return best ? { id: best.id, position: best.position } : null;
+    }, []);
+
+    const handleFavoriteDragStart = useCallback((e: React.MouseEvent, id: string) => {
+        e.preventDefault(); e.stopPropagation(); favoriteDragStateRef.current = { id, startY: e.clientY, moved: false }; cacheFavoriteRects();
+        const onMouseMove = (ev: MouseEvent) => {
+            if (!favoriteDragStateRef.current) return; if (Math.abs(ev.clientY - favoriteDragStateRef.current.startY) > 3) favoriteDragStateRef.current.moved = true;
+            const target = findFavoriteDropTarget(ev.clientY); setFavoriteDrop(target?.id !== favoriteDragStateRef.current.id ? target : null);
+        };
+        const onMouseUp = (ev: MouseEvent) => {
+            const state = favoriteDragStateRef.current; favoriteDragStateRef.current = null;
+            const target = findFavoriteDropTarget(ev.clientY); setFavoriteDrop(null);
+            window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp);
+            if (!state?.moved || !target || target.id === state.id) return;
+            const from = favorites.findIndex(f => f.id === state.id); let to = favorites.findIndex(f => f.id === target.id);
+            if (from === -1 || to === -1) return; if (target.position === 'after') to++; if (from < to) to--; moveFavoriteTo(state.id, to);
+        };
+        window.addEventListener('mousemove', onMouseMove); window.addEventListener('mouseup', onMouseUp);
+    }, [cacheFavoriteRects, findFavoriteDropTarget, favorites, moveFavoriteTo]);
 
     return (
         <div className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}>
-            <div className="custom-title-bar" data-tauri-drag-region onMouseDown={(e) => { if (e.button === 0) appWindow.startDragging(); }}>
-                <div className="title-bar-left" data-tauri-drag-region>
-                    <div className="title-bar-brand" data-tauri-drag-region>
-                        <ImageIcon size={14} /><span>PSD STUDIO</span>
-                    </div>
-                    <FileMenu
-                        recentFiles={recentFiles}
-                        onOpen={handleOpenFile}
-                        onOpenRecent={loadPsdFromFilePath}
-                        onClearRecent={clearRecentFiles}
-                        language={settings.language}
-                    />
-                </div>
-                <div className="window-controls">
-                    <button onClick={handleMinimize} onMouseDown={(e) => e.stopPropagation()} className="control-btn mini" title="Minimize"><Minus size={14} /></button>
-                    <button onClick={handleMaximize} onMouseDown={(e) => e.stopPropagation()} className="control-btn max" title="Maximize/Restore"><Square size={12} /></button>
-                    <button onClick={handleClose} onMouseDown={(e) => e.stopPropagation()} className="control-btn close" title="Close"><X size={14} /></button>
-                </div>
-            </div>
-
-            <header className="editor-header">
-                <div className="brand"><Layers size={20} className="text-accent" /><h1>{L.workspace}</h1></div>
-
-                {psd && (
-                    <div className="zoom-controls">
-                        <button onClick={() => setFlipX(v => !v)} className={flipX ? 'btn-active' : ''} title="Flip Horizontal"><FlipHorizontal2 size={16} /></button>
-                        <button onClick={() => setFlipY(v => !v)} className={flipY ? 'btn-active' : ''} title="Flip Vertical"><FlipVertical2 size={16} /></button>
-                        <div className="zoom-sep" />
-                        <button onClick={() => handleZoom(-0.1)} title="Zoom Out"><ZoomOut size={16} /></button>
-                        {zoomInputActive ? (
-                            <input
-                                ref={zoomInputRef}
-                                type="text"
-                                className="zoom-value zoom-input"
-                                value={zoomInputValue}
-                                onChange={e => setZoomInputValue(e.target.value.replace(/[^0-9]/g, ''))}
-                                onBlur={handleZoomInputCommit}
-                                onKeyDown={e => {
-                                    if (e.key === 'Enter') { e.preventDefault(); handleZoomInputCommit(); }
-                                    if (e.key === 'Escape') { setZoomInputActive(false); }
-                                }}
-                            />
-                        ) : (
-                            <span className="zoom-value" onClick={handleZoomInputFocus} title="クリックして数値入力">
-                                {Math.round(zoom * 100)}%
-                            </span>
-                        )}
-                        <button onClick={() => handleZoom(0.1)} title="Zoom In"><ZoomIn size={16} /></button>
-                        <button onClick={resetZoom} title="Reset View"><Maximize size={16} /></button>
-                        <div className="zoom-sep" />
-                        <button onClick={handleToggleFullscreen} className={isFullscreen ? 'btn-active' : ''} title="全画面 (F11)">
-                            {isFullscreen ? <Minimize size={16} /> : <Maximize2 size={16} />}
-                        </button>
-                    </div>
-                )}
-                <div className="btn-group" style={{ marginLeft: psd ? undefined : 'auto' }}>
-                    <button onClick={() => setShowSettings(true)} title={`${L.settings} (Ctrl+,)`} className="btn-settings">
-                        <Settings size={16} />
-                    </button>
-                    <button onClick={handleOpenFile}><FolderOpen size={18} /><span>{L.open}</span></button>
-                    {psd && (<>
-                        <button onClick={handleExportPng} className="btn-secondary"><Download size={18} /><span>{L.png}</span></button>
-                        <button onClick={handleSaveFile} className="btn-primary"><Save size={18} /><span>{L.savePsd}</span></button>
-                    </>)}
-                </div>
-            </header>
+            <EditorHeader 
+                psd={psd} recentFiles={recentFiles} handleOpenFile={handleOpenFile} 
+                loadPsdFromFilePath={loadPsdFromFilePath} clearRecentFiles={clearRecentFiles} 
+                language={settings.language} flipX={flipX} setFlipX={setFlipX} flipY={flipY} setFlipY={setFlipY} 
+                handleZoom={handleZoom} zoomInputActive={zoomInputActive} zoomInputRef={zoomInputRef} 
+                zoomInputValue={zoomInputValue} setZoomInputValue={setZoomInputValue} 
+                handleZoomInputCommit={handleZoomInputCommit} handleZoomInputFocus={handleZoomInputFocus} 
+                zoom={zoom} resetZoom={resetZoom} handleToggleFullscreen={handleToggleFullscreen} 
+                isFullscreen={isFullscreen} setShowSettings={setShowSettings} 
+                handleExportPng={handleExportPng} handleSaveFile={handleSaveFile} 
+                setZoomInputActive={setZoomInputActive} L={L}
+            />
 
             <div className="editor-main">
-                <aside className="layer-panel">
-                    <div className="panel-header">
-                        <h2>{L.layers}</h2>
-                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                            {psd && !searchResults && (<>
-                                <button className="toggle-expand" onClick={handleAddLayer} title={L.addLayer}><Plus size={14} /></button>
-                                <button className="toggle-expand" onClick={handleAddGroup} title={L.addGroup}><FolderPlus size={14} /></button>
-                                <div style={{ width: 1, height: 14, background: 'var(--line-mid)', margin: '0 2px' }} />
-                            </>)}
-                            {!searchResults && (<>
-                                <button className="toggle-expand" onClick={handleExpandAll} title={L.expandAll}><ChevronsUpDown size={14} /></button>
-                                <button className="toggle-expand" onClick={handleCollapseAll} title={L.collapseAll}><ChevronsDownUp size={14} /></button>
-                            </>)}
-                        </div>
-                    </div>
+                <LayerPanel 
+                    width={sidebarWidth}
+                    psd={psd} isLoading={isLoading} searchResults={searchResults} searchQuery={searchQuery} 
+                    setSearchQuery={setSearchQuery} searchInputRef={searchInputRef} 
+                    radioEnabled={radioEnabled} setRadioEnabled={setRadioEnabled} 
+                    lockedEnabled={lockedEnabled} setLockedEnabled={setLockedEnabled} 
+                    flipEnabled={flipEnabled} setFlipEnabled={setFlipEnabled} 
+                    closedKeys={closedKeys} handleToggleExpand={handleToggleExpand} 
+                    toggleLayerVisibility={toggleLayerVisibility} renameLayer={renameLayer} 
+                    toggleRadioLayer={toggleRadioLayer} handleDeleteLayer={handleDeleteLayer} 
+                    handleLayerDragStart={handleLayerDragStart} draggingPath={draggingPath} 
+                    dropTarget={dropTarget} hasFlipSuffix={hasFlipSuffix} 
+                    handleExpandAll={handleExpandAll} handleCollapseAll={handleCollapseAll} 
+                    handleAddLayer={handleAddLayer} handleAddGroup={handleAddGroup} 
+                    favorites={favorites} openCreateFavorite={openCreateFavorite} 
+                    handleApplyFavorite={handleApplyFavorite} openRenameFavorite={(f) => setFavoriteDialog({ mode: 'rename', id: f.id, value: f.name })} 
+                    deleteFavorite={deleteFavorite} handleFavoriteDragStart={handleFavoriteDragStart} 
+                    favoriteDrop={favoriteDrop} favoriteListRef={favoriteListRef} 
+                    layerScrollRef={layerScrollRef} formatFavoriteTime={formatFavoriteTime} 
+                    lang={settings.language} L={L}
+                />
 
-                    {psd && (
-                        <div className="layer-search-bar">
-                            <Search size={12} className="layer-search-icon" />
-                            <input
-                                ref={searchInputRef} type="text" className="layer-search-input"
-                                placeholder={L.searchPlaceholder} value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
-                            />
-                            {searchQuery && (
-                                <button className="layer-search-clear" onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }} title="Clear search">
-                                    <X size={11} />
-                                </button>
-                            )}
-                        </div>
-                    )}
+                <div className="sidebar-resizer" onMouseDown={handleResizerMouseDown} />
 
-                    {!searchResults && (
-                        <div className="layer-mode-bar">
-                            <button className={`mode-toggle ${radioEnabled ? 'active' : ''}`} onClick={() => setRadioEnabled(v => !v)} title="Radio group mode"><Asterisk size={13} /><span>{L.radio}</span></button>
-                            <button className={`mode-toggle ${lockedEnabled ? 'active' : ''}`} onClick={() => setLockedEnabled(v => !v)} title="Locked visibility mode"><Pin size={13} /><span>{L.fixed}</span></button>
-                            <button className={`mode-toggle ${flipEnabled ? 'active' : ''}`} onClick={() => setFlipEnabled(v => !v)} title="Flip variant mode"><Replace size={13} /><span>{L.flip}</span></button>
-                        </div>
-                    )}
-
-                    <div className="layer-scroll" ref={layerScrollRef}>
-                        {isLoading ? (
-                            <div className="layer-loading">
-                                {Array.from({ length: 8 }).map((_, i) => (
-                                    <div key={i} className="layer-shimmer-row" style={{ animationDelay: `${i * 60}ms` }}>
-                                        <div className="shimmer-icon" />
-                                        <div className="shimmer-icon" />
-                                        <div className="shimmer-thumb" />
-                                        <div className="shimmer-text" style={{ width: `${50 + (i * 37) % 35}%` }} />
-                                    </div>
-                                ))}
-                            </div>
-                        ) : psd && psd.children ? (
-                            searchResults ? (
-                                searchResults.length > 0 ? (
-                                    <div className="search-results-list">
-                                        {searchResults.map((result) => (
-                                            <SearchResultRow key={result.path.join('-')} result={result} onToggle={toggleLayerVisibility} />
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="empty-state"><p>{L.noLayers}</p></div>
-                                )
-                            ) : (
-                                <ul className="layer-list">
-                                    {[...psd.children].reverse().map((layer, index, array) => {
-                                        const originalIndex = array.length - 1 - index;
-                                        if (flipEnabled && hasFlipSuffix(layer.name || '')) return null;
-                                        return (
-                                            <LayerItem
-                                                key={originalIndex}
-                                                layer={layer}
-                                                path={[originalIndex]}
-                                                siblings={psd.children!}
-                                                radioEnabled={radioEnabled}
-                                                lockedEnabled={lockedEnabled}
-                                                flipEnabled={flipEnabled}
-                                                closedKeys={closedKeys}
-                                                onToggleExpand={handleToggleExpand}
-                                                onToggle={toggleLayerVisibility}
-                                                onRename={renameLayer}
-                                                onRadioSelect={toggleRadioLayer}
-                                                onDelete={handleDeleteLayer}
-                                                onDragStart={handleLayerDragStart}
-                                                draggingPath={draggingPath}
-                                                dropTarget={dropTarget}
-                                                hasFlipSuffix={hasFlipSuffix}
-                                            />
-                                        );
-                                    })}
-                                </ul>
-                            )
-                        ) : (
-                            <div className="empty-state"><p>{L.dropPsd}</p></div>
-                        )}
-                    </div>
-                </aside>
-
-                <div
-                    className="preview-panel"
-                    ref={scrollRef}
-                    style={{ overflow: 'scroll', scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-                >
-                    {isLoading ? (
-                        <div className="preview-loading">
-                            <div className="preview-loading-inner">
-                                <div className="loading-spinner" />
-                                <p className="loading-label">{L.loading}</p>
-                            </div>
-                        </div>
-                    ) : psd ? (
-                        <div className="preview-scroll-inner" style={{ width: SCROLL_AREA, height: SCROLL_AREA, position: 'relative' }}>
-                            <div
-                                ref={canvasContainerRef}
-                                className="canvas-container"
-                                style={{
-                                    position: 'absolute',
-                                    left: SCROLL_AREA / 2 - psd.width  / 2,
-                                    top:  SCROLL_AREA / 2 - psd.height / 2,
-                                    width: psd.width,
-                                    height: psd.height,
-                                    transform: `scale(${zoom})`,
-                                    transformOrigin: 'top left',
-                                }}
-                            >
-                                <canvas ref={canvasRef} />
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="placeholder" style={{ position: 'absolute', inset: 0 }}>
-                            <Monitor className="placeholder-icon" />
-                            <p>{L.dropPsd}</p>
-                        </div>
-                    )}
-                </div>
+                <PreviewArea 
+                    psd={psd} isLoading={isLoading} scrollRef={scrollRef} 
+                    canvasContainerRef={canvasContainerRef} canvasRef={canvasRef} 
+                    SCROLL_AREA={SCROLL_AREA} L={L}
+                />
             </div>
 
             {isDragging && (
                 <div className="drag-overlay">
                     <div className="drag-message">
-                        <div className="overlay-icon-ring"><Download size={48} /></div>
+                        <div className="overlay-icon-ring"><ImageIcon size={48} /></div>
                         <div className="overlay-text"><h3>{L.dragDrop}</h3><p>{L.dragRelease}</p></div>
                     </div>
                 </div>
             )}
 
-            {showSettings && (
-                <SettingsModal settings={settings} onUpdate={updateSettings} onClose={() => setShowSettings(false)} />
-            )}
-
+            {showSettings && <SettingsModal settings={settings} onUpdate={updateSettings} onClose={() => setShowSettings(false)} />}
             {notification && <Toast message={notification.message} type={notification.type} onClose={handleCloseNotification} />}
+            {favoriteDialog && (
+                <FavoriteModal 
+                    favoriteDialog={favoriteDialog} closeFavoriteDialog={() => setFavoriteDialog(null)} 
+                    confirmFavoriteDialog={confirmFavoriteDialog} favoriteInputRef={favoriteInputRef} 
+                    setFavoriteDialog={setFavoriteDialog} L={L}
+                />
+            )}
         </div>
     );
 };

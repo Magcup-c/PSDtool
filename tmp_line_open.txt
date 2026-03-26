@@ -1,0 +1,1 @@
+        } catch (err) { showToast(`Failed to open file: ${err instanceof Error ? err.message : String(err)}`, 'error'); }

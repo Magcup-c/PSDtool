@@ -1,0 +1,5 @@
+﻿    const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
+        setNotification({ message, type }), []);
+        setNotification({ message, type });
+
+    const handleCopyCanvas = useCallback(async () => {

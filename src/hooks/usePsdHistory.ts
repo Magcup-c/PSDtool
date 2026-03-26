@@ -97,6 +97,13 @@ export function usePsdHistory(initialPsd: Psd | null) {
         }
     }, [commitPsd]);
 
+    const resetHistory = useCallback((next: Psd | null) => {
+        undoStack.current = [];
+        redoStack.current = [];
+        setPsd(next);
+        psdRef.current = next;
+    }, []);
+
     return {
         psd,
         setPsd,
@@ -107,5 +114,6 @@ export function usePsdHistory(initialPsd: Psd | null) {
         handleRedo,
         normalizeRadioGroups,
         toggleRadioLayer,
+        resetHistory,
     };
 }

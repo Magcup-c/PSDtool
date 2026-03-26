@@ -1,0 +1,1 @@
+        drawRafRef.current = requestAnimationFrame(() => { drawCanvas(); drawRafRef.current = null; });

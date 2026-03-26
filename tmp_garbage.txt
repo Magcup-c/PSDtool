@@ -1,0 +1,10 @@
+﻿
+        ctx.save();
+        if (currentFlipX && currentFlipY) { ctx.translate(currentPsd.width, currentPsd.height); ctx.scale(-1, -1); }
+        else if (currentFlipX) { ctx.translate(currentPsd.width, 0); ctx.scale(-1, 1); }
+        else if (currentFlipY) { ctx.translate(0, currentPsd.height); ctx.scale(1, -1); }
+
+        const buildFlipVariantMap = (layers: any[]) => {
+            const map = new Map<string, any>();
+            if (!flipEnabled || !flipSuffix) return map;
+            for (const l of layers) {

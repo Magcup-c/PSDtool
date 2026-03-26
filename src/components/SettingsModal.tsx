@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Monitor, ZoomIn, Globe, Check, Laptop } from 'lucide-react';
+import { X, Monitor, ZoomIn, Globe, Check, Laptop, HelpCircle } from 'lucide-react';
 import { AppSettings } from '../hooks/useSettings';
 
 interface SettingsModalProps {
@@ -28,12 +28,23 @@ const T = {
         recentFilesDesc: '履歴の最大件数',
         cancel: 'キャンセル',
         apply: 'OK',
+        defaultApp: '既定のアプリ',
+        defaultAppDesc: '.psdファイルを本アプリに関連付けます',
+        openOSSettings: 'OSの設定を開く',
+        defaultAppNote: '※OS設定の「ファイルの種類ごとに既定のアプリを選ぶ」から、.psdを本アプリに変更してください。',
         themes: {
             black: 'Black',
             grey: 'Grey',
             light: 'Light',
             white: 'White',
         },
+        help: 'ヘルプ',
+        shortcuts: 'ショートカット (プレビューエリア)',
+        shortcutZoomIn: 'ズームイン',
+        shortcutZoomOut: 'ズームアウト',
+        shortcutFit: '全画面表示にする',
+        shortcutPan: 'パン (移動)',
+        about: 'このアプリについて',
     },
     en: {
         title: 'Settings',
@@ -54,12 +65,23 @@ const T = {
         recentFilesDesc: 'Max entries in history',
         cancel: 'Cancel',
         apply: 'OK',
+        defaultApp: 'Default App',
+        defaultAppDesc: 'Associate .psd files with this app',
+        openOSSettings: 'Open OS Settings',
+        defaultAppNote: 'Note: Go to "Choose default apps by file type" in OS settings and change .psd to this app.',
         themes: {
             black: 'Black',
             grey: 'Grey',
             light: 'Light',
             white: 'White',
         },
+        help: 'Help',
+        shortcuts: 'Shortcuts (Preview Area)',
+        shortcutZoomIn: 'Zoom In',
+        shortcutZoomOut: 'Zoom Out',
+        shortcutFit: 'Fit to View',
+        shortcutPan: 'Pan Tool',
+        about: 'About',
     },
 } as const;
 
@@ -72,6 +94,8 @@ const THEME_COLORS: Record<AppSettings['theme'], { bg: string; panel: string; ac
 
 const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.5, 2];
 
+import { invoke } from '@tauri-apps/api/core';
+
 export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProps) => {
     const [local, setLocal] = useState<AppSettings>({
         ...settings,
@@ -83,6 +107,11 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
     const handleApply = () => {
         onUpdate(local);
         onClose();
+    };
+
+    const handleOpenDefaultApps = async () => {
+        try { await invoke('open_default_app_settings'); }
+        catch (e) { console.error('Failed to open settings', e); }
     };
 
     const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -231,6 +260,55 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                     </button>
                                 ))}
                             </div>
+                        </div>
+
+                        {/* 規定のアプリ */}
+                        <div className="settings-field" style={{ marginTop: 12 }}>
+                            <div className="settings-field-label">{t.defaultApp}</div>
+                            <div className="settings-field-desc">{t.defaultAppDesc}</div>
+                            <div style={{ marginTop: 8 }}>
+                                <button className="settings-action-btn" onClick={handleOpenDefaultApps}>
+                                    {t.openOSSettings}
+                                </button>
+                                <div style={{ fontSize: '10px', color: 'var(--text-weak)', marginTop: 4, lineHeight: '1.4' }}>
+                                    {t.defaultAppNote}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* ヘルプセクション */}
+                    <div className="settings-section">
+                        <div className="settings-section-heading">
+                            <HelpCircle size={11} />
+                            <span>{t.help}</span>
+                        </div>
+
+                        <div className="settings-field">
+                            <div className="settings-field-label">{t.shortcuts}</div>
+                            <div className="shortcut-list">
+                                <div className="shortcut-row">
+                                    <span>{t.shortcutZoomIn}</span>
+                                    <div className="shortcut-keys"><kbd>Ctrl</kbd> <span>+</span> <kbd>+</kbd></div>
+                                </div>
+                                <div className="shortcut-row">
+                                    <span>{t.shortcutZoomOut}</span>
+                                    <div className="shortcut-keys"><kbd>Ctrl</kbd> <span>+</span> <kbd>-</kbd></div>
+                                </div>
+                                <div className="shortcut-row">
+                                    <span>{t.shortcutFit}</span>
+                                    <div className="shortcut-keys"><kbd>Ctrl</kbd> <span>+</span> <kbd>0</kbd></div>
+                                </div>
+                                <div className="shortcut-row">
+                                    <span>{t.shortcutPan}</span>
+                                    <div className="shortcut-keys"><kbd>Space</kbd> <span>+</span> <kbd>Drag</kbd></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="settings-field" style={{ marginTop: 12 }}>
+                            <div className="settings-field-label">{t.about}</div>
+                            <div className="settings-field-desc">PSD Editor v0.1.0</div>
                         </div>
                     </div>
                 </div>

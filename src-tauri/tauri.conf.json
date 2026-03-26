@@ -24,6 +24,52 @@
       "csp": null
     }
   },
+  "plugins": {
+    "cli": {
+        "description": "PSD Studio CLI",
+        "args": [
+            {
+                "name": "input",
+                "description": "Path to the PSD file to open",
+                "index": 1,
+                "takesValue": true
+            }
+        ],
+        "subcommands": {
+            "open": {
+                "description": "Open a file in the editor",
+                "args": [
+                    {
+                        "name": "path",
+                        "description": "Path to the PSD file",
+                        "index": 1,
+                        "required": true,
+                        "takesValue": true
+                    }
+                ]
+            },
+            "convert": {
+                "description": "Export a PSD file to PNG directly (Headless)",
+                "args": [
+                    {
+                        "name": "input",
+                        "description": "Input PSD file path",
+                        "index": 1,
+                        "required": true,
+                        "takesValue": true
+                    },
+                    {
+                        "name": "output",
+                        "description": "Output PNG file path",
+                        "index": 2,
+                        "required": true,
+                        "takesValue": true
+                    }
+                ]
+            }
+        }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -33,6 +79,14 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["psd"],
+        "name": "PSD Image",
+        "description": "Adobe Photoshop Document",
+        "role": "Viewer"
+      }
     ]
   }
 }
