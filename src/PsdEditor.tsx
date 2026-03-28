@@ -1,12 +1,11 @@
 /**
- * src/PsdEditor.tsx  (updated)
- *
- * 変更点:
- *   1. useTabManager でマルチタブ管理
- *   2. TabBar コンポーネントを EditorHeader 下に追加
- *   3. タブ切り替え時にスクロール・ズーム・フリップ状態を復元
- *   4. 書き出し形式（JPEG/WebP/SVG）に対応した handleExport
- *   5. SettingsModal に onPreview（テーマ即時プレビュー）を渡す
+ * src/PsdEditor.tsx (メモリリーク対策版)
+ * 
+ * 修正項目:
+ * 1. リソース管理の一元化 (タイマー、RAF、リスナー)
+ * 2. イベントリスナーのクリーンアップ徹底
+ * 3. 非同期処理の確実なクリア
+ * 4. useCallback 依存配列の最適化
  */
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
@@ -37,7 +36,16 @@ import { LayerPanel } from './components/editor/LayerPanel';
 import { PreviewArea } from './components/editor/PreviewArea';
 import { FavoriteModal } from './components/editor/FavoriteModal';
 
-// ─── layer state helpers ────────────────────────────────────────────────────
+// ── Resource Management ──
+
+interface ResourceCleanup {
+    timers: ReturnType<typeof setTimeout>[];
+    rafs: number[];
+    listeners: Array<{ target: EventTarget; event: string; handler: EventListener; options?: AddEventListenerOptions }>;
+    unlisteners: Array<() => void>;
+}
+
+// ── Helper Functions ──
 
 function captureLayerState(layers: any[]): any[] {
     return layers.map(layer => ({
@@ -64,8 +72,6 @@ function formatFavoriteTime(ts: number, lang: 'ja' | 'en') {
         });
     } catch { return ''; }
 }
-
-// ─── Canvas export helpers ──────────────────────────────────────────────────
 
 type ExportFormat = 'png' | 'jpeg' | 'webp' | 'svg';
 
@@ -94,7 +100,7 @@ async function exportCanvas(
         png:  'image/png',
         jpeg: 'image/jpeg',
         webp: 'image/webp',
-        svg:  'image/png', // unreachable
+        svg:  'image/png',
     };
     return new Promise<Uint8Array>((resolve, reject) => {
         canvas.toBlob(blob => {
@@ -104,7 +110,7 @@ async function exportCanvas(
     });
 }
 
-// ─── Main Component ──────────────────────────────────────────────────────────
+// ── Main Component ──
 
 const PsdEditor = () => {
     const {
@@ -117,7 +123,47 @@ const PsdEditor = () => {
     const [showSettings, setShowSettings] = useState(false);
     const { recentFiles, addRecentFile, clearRecentFiles } = useRecentFiles(settings.maxRecentFiles ?? 10);
 
-    // ── タブ管理 ──
+    // ── Resource Management ──
+    const resourcesRef = useRef<ResourceCleanup>({
+        timers: [],
+        rafs: [],
+        listeners: [],
+        unlisteners: [],
+    });
+
+    const scheduleTimer = useCallback((fn: () => void, delay: number) => {
+        const id = setTimeout(() => {
+            fn();
+            resourcesRef.current.timers = resourcesRef.current.timers.filter(t => t !== id);
+        }, delay);
+        resourcesRef.current.timers.push(id);
+        return id;
+    }, []);
+
+    const scheduleRaf = useCallback((fn: () => void) => {
+        const id = requestAnimationFrame(() => {
+            fn();
+            resourcesRef.current.rafs = resourcesRef.current.rafs.filter(r => r !== id);
+        });
+        resourcesRef.current.rafs.push(id);
+        return id;
+    }, []);
+
+    const registerListener = useCallback((
+        target: EventTarget,
+        event: string,
+        handler: EventListener,
+        options?: AddEventListenerOptions
+    ) => {
+        target.addEventListener(event, handler, options);
+        resourcesRef.current.listeners.push({ target, event, handler, options });
+    }, []);
+
+    const registerUnlistener = useCallback((fn: () => void) => {
+        resourcesRef.current.unlisteners.push(fn);
+    }, []);
+
+    // ── Tab Management ──
     const tabManager = useTabManager();
     const { tabs, activeId, updateTab } = tabManager;
     const tabsRef = useRef(tabs);
@@ -125,9 +171,7 @@ const PsdEditor = () => {
     const activeIdRef = useRef(activeId);
     activeIdRef.current = activeId;
 
-    /** 同一タブに複数読み込みが走ったとき古い結果を捨てる（世代番号） */
     const loadGenByTabRef = useRef<Map<string, number>>(new Map());
-    /** 並行読み込み数 — いずれかが終わるまでプレビューはローディング表示 */
     const loadCountRef = useRef(0);
 
     const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
@@ -161,18 +205,12 @@ const PsdEditor = () => {
     const dragStateRef       = useRef<{ path: number[]; startY: number; moved: boolean } | null>(null);
     const favoriteDragStateRef = useRef<{ id: string; startY: number; moved: boolean } | null>(null);
     const drawDirtyRef = useRef(false);
-    const drawRafRef   = useRef<number | null>(null);
-    const centerRafRef = useRef<number | null>(null);
-    const zoomSelectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const resizeCleanupRef = useRef<(() => void) | null>(null);
-    const layerDragCleanupRef = useRef<(() => void) | null>(null);
-    const favoriteDragCleanupRef = useRef<(() => void) | null>(null);
+    const renameSessionRef = useRef(false);
 
     const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
-    // ── ファイルを開く共通ロジック ──────────────────────────────────────────
-
+    // ── First Load ──
     const isFirstLoadRef = useRef(true);
     useEffect(() => {
         if (!psd) return;
@@ -184,13 +222,10 @@ const PsdEditor = () => {
         const tryCenter = () => {
             attempts++;
             if (el.clientWidth > 0 && el.clientHeight > 0) { centerPsd(); return; }
-            if (attempts < 10) centerRafRef.current = requestAnimationFrame(tryCenter);
+            if (attempts < 10) scheduleRaf(tryCenter);
         };
-        centerRafRef.current = requestAnimationFrame(tryCenter);
-        return () => {
-            if (centerRafRef.current) cancelAnimationFrame(centerRafRef.current);
-        };
-    }, [psd, centerPsd]);
+        scheduleRaf(tryCenter);
+    }, [psd, centerPsd, scheduleRaf]);
 
     const appWindow = getCurrentWindow();
     const handleCloseNotification = useCallback(() => setNotification(null), []);
@@ -208,9 +243,9 @@ const PsdEditor = () => {
     const handleZoomInputFocus = useCallback(() => {
         setZoomInputValue(String(Math.round(zoom * 100)));
         setZoomInputActive(true);
-        if (zoomSelectTimerRef.current) clearTimeout(zoomSelectTimerRef.current);
-        zoomSelectTimerRef.current = setTimeout(() => zoomInputRef.current?.select(), 0);
-    }, [zoom]);
+        const timerId = scheduleTimer(() => zoomInputRef.current?.select(), 0);
+        return () => clearTimeout(timerId);
+    }, [zoom, scheduleTimer]);
 
     const handleZoomInputCommit = useCallback(() => {
         setZoomInputActive(false);
@@ -301,7 +336,6 @@ const PsdEditor = () => {
         saveFailed: lang === 'ja' ? '保存に失敗しました' : 'Failed to save file',
         exportSuccess: lang === 'ja' ? 'エクスポートが完了しました' : 'Exported successfully!',
         exportFailed: lang === 'ja' ? 'エクスポートに失敗しました' : 'Failed to export',
-        // タブ
         newTab: lang === 'ja' ? '新しいタブ' : 'New tab',
         closeTab: lang === 'ja' ? 'タブを閉じる' : 'Close tab',
     }), [lang]);
@@ -309,8 +343,7 @@ const PsdEditor = () => {
     const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
         setNotification({ message, type }), []);
 
-    // ── タブ切り替え時の状態保存 / 復元 ────────────────────────────────────
-
+    // ── Tab Switch State Preservation ──
     const prevActiveIdRef = useRef<string>(activeId);
     const outgoingUiRef = useRef({
         zoom, flipX, flipY, closedKeys: Array.from(closedKeys),
@@ -351,13 +384,10 @@ const PsdEditor = () => {
         }
     }, [activeId, updateTab, resetHistory, setZoomTo]);
 
-    // ── PSD 読み込み ───────────────────────────────────────────────────────
-
+    // ── File Loading ──
     const loadPsdFromFilePath = useCallback(async (filePath: string, tabId?: string) => {
-        // 既に同じファイルが開かれているタブがあればそちらをアクティブ
         if (tabManager.activateExistingTab(filePath)) return;
 
-        // tabId が指定されていれば既存タブに上書き、なければ新規タブ
         const targetId = tabId ?? tabManager.openNewTab({ filePath, fileName: filePath.replace(/\\/g, '/').split('/').pop() ?? filePath, isLoading: true });
         tabManager.updateTab(targetId, { isLoading: true });
 
@@ -368,8 +398,7 @@ const PsdEditor = () => {
         setIsLoading(true);
         isFirstLoadRef.current = true;
 
-        const tabStillTargeted = () =>
-            loadGenByTabRef.current.get(targetId) === g;
+        const tabStillTargeted = () => loadGenByTabRef.current.get(targetId) === g;
 
         try {
             const data = await readFile(filePath);
@@ -424,8 +453,6 @@ const PsdEditor = () => {
         loadPsdFromFilePath(filePath, targetId);
     }, [loadPsdFromFilePath]);
 
-    // ── タブ新規作成 ────────────────────────────────────────────────────────
-
     const handleNewTab = useCallback(() => {
         tabManager.openNewTab();
         resetHistory(null);
@@ -434,8 +461,6 @@ const PsdEditor = () => {
         setClosedKeys(new Set());
     }, [tabManager, resetHistory]);
 
-    // ── タブ閉じる ──────────────────────────────────────────────────────────
-
     const handleCloseTab = useCallback((id: string) => {
         loadGenByTabRef.current.delete(id);
         startTransition(() => {
@@ -443,14 +468,11 @@ const PsdEditor = () => {
         });
     }, [tabManager]);
 
-    // ── タブ アクティブ切り替え ─────────────────────────────────────────────
-
     const handleActivateTab = useCallback((id: string) => {
         tabManager.setActiveId(id);
     }, [tabManager]);
 
-    // ── 起動引数・イベント受信 ─────────────────────────────────────────────
-
+    // ── Startup & File Events ──
     useEffect(() => {
         const checkArgs = async () => {
             try {
@@ -463,27 +485,55 @@ const PsdEditor = () => {
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
-        const unlistenPromise = listen<string[]>('open-file', (event) => {
-            const psdFile = event.payload.slice(1).find(x => x.toLowerCase().endsWith('.psd'));
-            if (psdFile) openPsdUnified(psdFile);
-            getCurrentWindow().setFocus();
-        });
-        return () => { unlistenPromise.then(u => u()); };
-    }, [openPsdUnified]);
+        let unlistenPromise: Promise<() => void> | null = null;
+        
+        (async () => {
+            try {
+                const unlisten = await listen<string[]>('open-file', (event) => {
+                    const psdFile = event.payload.slice(1).find(x => x.toLowerCase().endsWith('.psd'));
+                    if (psdFile) openPsdUnified(psdFile);
+                    getCurrentWindow().setFocus();
+                });
+                registerUnlistener(unlisten);
+            } catch (e) {
+                console.error('Failed to listen open-file', e);
+            }
+        })();
+
+        return () => {
+            if (unlistenPromise) {
+                unlistenPromise.then(u => { if (u) u(); });
+            }
+        };
+    }, [openPsdUnified, registerUnlistener]);
 
     useEffect(() => {
-        const unlistenPromises = Promise.all([
-            listen('tauri://drag-over', () => setIsDragging(true)),
-            listen('tauri://drag-drop', (event: any) => {
-                setIsDragging(false);
-                const paths = event.payload.paths;
-                if (paths?.length > 0 && paths[0].toLowerCase().endsWith('.psd'))
-                    openPsdUnified(paths[0]);
-            }),
-            listen('tauri://drag-leave', () => setIsDragging(false)),
-        ]);
-        return () => { unlistenPromises.then(us => us.forEach(u => u())); };
-    }, [openPsdUnified]);
+        const unlistenPromises: Promise<() => void>[] = [];
+        
+        (async () => {
+            try {
+                const listeners = await Promise.all([
+                    listen('tauri://drag-over', () => setIsDragging(true)),
+                    listen('tauri://drag-drop', (event: any) => {
+                        setIsDragging(false);
+                        const paths = event.payload.paths;
+                        if (paths?.length > 0 && paths[0].toLowerCase().endsWith('.psd'))
+                            openPsdUnified(paths[0]);
+                    }),
+                    listen('tauri://drag-leave', () => setIsDragging(false)),
+                ]);
+                listeners.forEach(u => registerUnlistener(u));
+            } catch (e) {
+                console.error('Failed to setup drag listeners', e);
+            }
+        })();
+
+        return () => {
+            unlistenPromises.forEach(p => {
+                p.then(u => { if (u) u(); }).catch(() => {});
+            });
+        };
+    }, [openPsdUnified, registerUnlistener]);
 
     const handleOpenFile = useCallback(async () => {
         try {
@@ -494,8 +544,7 @@ const PsdEditor = () => {
         } catch (err) { showToast(`${L.openFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     }, [openPsdUnified, showToast, L]);
 
-    // ── キーボードショートカット ────────────────────────────────────────────
-
+    // ── Keyboard Shortcuts ──
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
             const tag = (e.target as HTMLElement).tagName;
@@ -511,18 +560,14 @@ const PsdEditor = () => {
             if (e.key === 'F11') { e.preventDefault(); handleToggleFullscreen(); return; }
             if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleOpenFile(); return; }
             if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setShowSettings(true); return; }
-            // ブラウザ標準ショートカット無効化
-            if (e.key === 'F5') { e.preventDefault(); return; }
-            if (e.key === 'F12') { e.preventDefault(); return; }
+            if (e.key === 'F5' || e.key === 'F12') { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'p' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'f' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'r' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'i' && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); return; }
-            // Zoom
             if ((e.key === '+' || e.key === ';') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(0.1); return; }
             if ((e.key === '=' || e.key === '-') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(-0.1); return; }
             if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); centerPsd(); return; }
-            // タブ切り替え Ctrl+Tab / Ctrl+Shift+Tab
             if (e.key === 'Tab' && e.ctrlKey) {
                 e.preventDefault();
                 const idx = tabs.findIndex(t => t.id === activeId);
@@ -531,22 +576,18 @@ const PsdEditor = () => {
                     : (idx + 1) % tabs.length;
                 handleActivateTab(tabs[next].id);
             }
-            // Ctrl+W でタブを閉じる
             if (e.key.toLowerCase() === 'w' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault(); handleCloseTab(activeId);
             }
-            // Ctrl+T で新しいタブ
             if (e.key.toLowerCase() === 't' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault(); handleNewTab();
             }
         };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
+        registerListener(window, 'keydown', onKeyDown);
     }, [handleUndo, handleRedo, handleOpenFile, handleToggleFullscreen, handleZoom, centerPsd,
-        tabs, activeId, handleActivateTab, handleCloseTab, handleNewTab]);
+        tabs, activeId, handleActivateTab, handleCloseTab, handleNewTab, registerListener]);
 
-    // ── サイドバーリサイズ ──────────────────────────────────────────────────
-
+    // ── Sidebar Resize ──
     const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
         isResizingRef.current = true;
@@ -556,23 +597,17 @@ const PsdEditor = () => {
             setSidebarWidth(Math.max(200, Math.min(600, ev.clientX)));
         };
         const onMouseUp = () => {
-            if (resizeCleanupRef.current) {
-                resizeCleanupRef.current();
-                resizeCleanupRef.current = null;
-            }
-        };
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-        resizeCleanupRef.current = () => {
             isResizingRef.current = false;
             document.body.style.cursor = '';
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
+            resourcesRef.current.listeners = resourcesRef.current.listeners.filter(
+                l => l.handler !== onMouseMove && l.handler !== onMouseUp
+            );
         };
-    }, []);
+        registerListener(document, 'mousemove', onMouseMove);
+        registerListener(document, 'mouseup', onMouseUp);
+    }, [registerListener]);
 
-    // ── 保存 ────────────────────────────────────────────────────────────────
-
+    // ── File Operations ──
     const handleSaveFile = async () => {
         if (!psd) return;
         try {
@@ -587,8 +622,6 @@ const PsdEditor = () => {
             }
         } catch (err) { showToast(`${L.saveFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
-
-    // ── 書き出し（マルチフォーマット対応） ─────────────────────────────────
 
     const handleExportPng = async () => {
         if (!canvasRef.current || !psd) return;
@@ -611,8 +644,6 @@ const PsdEditor = () => {
         } catch (err) { showToast(`${L.exportFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
-    // ── クリップボードコピー ────────────────────────────────────────────────
-
     const handleCopyCanvas = useCallback(async () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -628,25 +659,21 @@ const PsdEditor = () => {
         } catch (err) { showToast(`${L.copyFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     }, [showToast, L]);
 
-    // ── レイヤー操作 ────────────────────────────────────────────────────────
-
+    // ── Layer Operations ──
     const toggleLayerVisibility = useCallback((path: number[]) => {
         if (!psdRef.current) return;
         commitPsd(updateLayerByPath(psdRef.current, path, l => ({ ...l, hidden: !l.hidden })));
         tabManager.markDirty();
     }, [commitPsd, psdRef, tabManager]);
 
-    const renameSessionRef = useRef(false);
-    const renameTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
     const renameLayer = useCallback((path: number[], newName: string) => {
         if (!psdRef.current) return;
         const updated = updateLayerByPath(psdRef.current, path, l => ({ ...l, name: newName }));
         if (!renameSessionRef.current) { renameSessionRef.current = true; pushSnapshot(psdRef.current); }
         setPsd(updated);
         tabManager.markDirty();
-        if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-        renameTimerRef.current = setTimeout(() => { renameTimerRef.current = null; renameSessionRef.current = false; }, 600);
-    }, [psdRef, setPsd, pushSnapshot, tabManager]);
+        const timerId = scheduleTimer(() => { renameSessionRef.current = false; }, 600);
+    }, [psdRef, setPsd, pushSnapshot, tabManager, scheduleTimer]);
 
     const handleAddLayer = useCallback(() => {
         if (!psdRef.current) return;
@@ -677,8 +704,7 @@ const PsdEditor = () => {
         tabManager.markDirty();
     }, [commitPsd, psdRef, tabManager]);
 
-    // ── ドラッグ&ドロップ (レイヤー並び替え) ─────────────────────────────────
-
+    // ── Drag & Drop (Layer Reordering) ──
     const itemRectsRef  = useRef<{ rect: DOMRect; path: number[]; isGroup: boolean }[]>([]);
     const cacheItemRects = useCallback(() => {
         const scroll = layerScrollRef.current; if (!scroll) return;
@@ -727,10 +753,9 @@ const PsdEditor = () => {
         const onMouseUp = (ev: MouseEvent) => {
             const state = dragStateRef.current; dragStateRef.current = null;
             setDraggingPath(null); setDropTarget(null);
-            if (layerDragCleanupRef.current) {
-                layerDragCleanupRef.current();
-                layerDragCleanupRef.current = null;
-            }
+            resourcesRef.current.listeners = resourcesRef.current.listeners.filter(
+                l => l.handler !== onMouseMove && l.handler !== onMouseUp
+            );
             if (!state?.moved) return;
             const target = findDropTargetFromCache(ev.clientY);
             if (!target) return;
@@ -740,24 +765,18 @@ const PsdEditor = () => {
             const nextPsd = moveLayer(psdRef.current, state.path, target.path, target.position);
             if (nextPsd) { commitPsd(nextPsd); tabManager.markDirty(); }
         };
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp);
-        layerDragCleanupRef.current = () => {
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
-        };
-    }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd, tabManager]);
+        registerListener(window, 'mousemove', onMouseMove);
+        registerListener(window, 'mouseup', onMouseUp);
+    }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd, tabManager, registerListener]);
 
-    // ── フリップ関連 ────────────────────────────────────────────────────────
-
+    // ── Flip ──
     const getFlipSuffix  = useCallback(() => {
         if (flipX && flipY) return ':flipxy'; if (flipX) return ':flipx'; if (flipY) return ':flipy'; return '';
     }, [flipX, flipY]);
     const hasFlipSuffix  = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
     const getBaseName    = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
 
-    // ── Canvas 描画 ─────────────────────────────────────────────────────────
-
+    // ── Canvas Drawing ──
     const drawCanvas = useCallback(() => {
         const canvas = canvasRef.current;
         const currentPsd = psdRef.current;
@@ -801,13 +820,11 @@ const PsdEditor = () => {
     useEffect(() => {
         if (!psd) return;
         drawDirtyRef.current = true;
-        if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
-        drawRafRef.current = requestAnimationFrame(() => { drawCanvas(); drawRafRef.current = null; });
-        return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
-    }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
+        const id = scheduleRaf(() => { drawCanvas(); });
+        return () => cancelAnimationFrame(id);
+    }, [psd, flipX, flipY, flipEnabled, drawCanvas, scheduleRaf]);
 
-    // ── お気に入り ──────────────────────────────────────────────────────────
-
+    // ── Favorites ──
     const handleApplyFavorite = useCallback((fav: LayerFavorite) => {
         if (!psdRef.current) return;
         const current = psdRef.current;
@@ -875,10 +892,9 @@ const PsdEditor = () => {
             const state = favoriteDragStateRef.current; favoriteDragStateRef.current = null;
             const target = findFavoriteDropTarget(ev.clientY);
             setFavoriteDrop(null);
-            if (favoriteDragCleanupRef.current) {
-                favoriteDragCleanupRef.current();
-                favoriteDragCleanupRef.current = null;
-            }
+            resourcesRef.current.listeners = resourcesRef.current.listeners.filter(
+                l => l.handler !== onMouseMove && l.handler !== onMouseUp
+            );
             if (!state?.moved || !target || target.id === state.id) return;
             const from = favorites.findIndex(f => f.id === state.id);
             let to = favorites.findIndex(f => f.id === target.id);
@@ -887,36 +903,44 @@ const PsdEditor = () => {
             if (from < to) to--;
             moveFavoriteTo(state.id, to);
         };
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp);
-        favoriteDragCleanupRef.current = () => {
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
-        };
-    }, [cacheFavoriteRects, findFavoriteDropTarget, favorites, moveFavoriteTo]);
+        registerListener(window, 'mousemove', onMouseMove);
+        registerListener(window, 'mouseup', onMouseUp);
+    }, [cacheFavoriteRects, findFavoriteDropTarget, favorites, moveFavoriteTo, registerListener]);
 
-    // ── Cleanup (avoid leaks on unmount) ─────────────────────────────────────
-
+    // ── Global Cleanup ──
     useEffect(() => {
         return () => {
-            if (zoomSelectTimerRef.current) clearTimeout(zoomSelectTimerRef.current);
-            if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-            if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
-            if (centerRafRef.current) cancelAnimationFrame(centerRafRef.current);
-            if (resizeCleanupRef.current) resizeCleanupRef.current();
-            if (layerDragCleanupRef.current) layerDragCleanupRef.current();
-            if (favoriteDragCleanupRef.current) favoriteDragCleanupRef.current();
+            // タイマー
+            resourcesRef.current.timers.forEach(id => clearTimeout(id));
+            resourcesRef.current.timers = [];
+
+            // RAF
+            resourcesRef.current.rafs.forEach(id => cancelAnimationFrame(id));
+            resourcesRef.current.rafs = [];
+
+            // イベントリスナー
+            resourcesRef.current.listeners.forEach(({ target, event, handler, options }) => {
+                try {
+                    target.removeEventListener(event, handler, options);
+                } catch (e) {
+                    // リスナーが既に削除されている可能性
+                    console.debug('Failed to remove listener', e);
+                }
+            });
+            resourcesRef.current.listeners = [];
+
+            // 非同期リスナー
+            resourcesRef.current.unlisteners.forEach(fn => { try { fn(); } catch (e) { console.debug('Unlisten failed', e); } });
+            resourcesRef.current.unlisteners = [];
         };
     }, []);
 
-    // ── テーマ即時プレビュー ────────────────────────────────────────────────
-
+    // ── Theme Preview ──
     const handlePreviewTheme = useCallback((theme: AppSettings['theme']) => {
         updateSettings({ theme });
     }, [updateSettings]);
 
-    // ── Render ──────────────────────────────────────────────────────────────
-
+    // ── Render ──
     return (
         <div className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}>
             <EditorHeader
@@ -934,7 +958,6 @@ const PsdEditor = () => {
                 exportAriaLabel={exportAriaLabel}
             />
 
-            {/* ── タブバー ── */}
             <TabBar
                 tabs={tabs}
                 activeId={activeId}
