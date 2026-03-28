@@ -5,7 +5,7 @@
  * 各タブは独立した psd / 履歴スタック / UI状態を保持する。
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { Psd } from 'ag-psd';
 
 export interface TabState {
@@ -88,8 +88,9 @@ export function useTabManager() {
     const closeTab = useCallback((id: string) => {
         setTabs(prev => {
             if (prev.length === 1) {
-                // 最後の1枚はリセット
-                const reset = makeEmptyTab({ id: prev[0].id });
+                // 最後の1枚は空タブに置き換え。id を新規にして activeId が変わるようにする
+                // （同一 id のままだと PsdEditor のタブ同期が走らず前タブの PSD が残る）
+                const reset = makeEmptyTab();
                 setActiveId(reset.id);
                 return [reset];
             }

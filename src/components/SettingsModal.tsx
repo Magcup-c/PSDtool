@@ -308,7 +308,13 @@ export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: Settin
                         {local.exportFormat === 'svg' && (
                             <div className="settings-export-note">
                                 {local.language === 'ja'
-                                    ? 'SVGはキャンバスをラスターとして埋め込みます（ベクター変換ではありません）'
+                                    ? (
+                                        <>
+                                            SVGはキャンバスをラスターとして埋め込みます
+                                            <br />
+                                            (ベクター変換ではありません)
+                                        </>
+                                    )
                                     : 'SVG embeds the canvas as a raster image (not vector conversion)'}
                             </div>
                         )}

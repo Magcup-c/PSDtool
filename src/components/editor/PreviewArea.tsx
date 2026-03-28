@@ -3,6 +3,7 @@ import { Monitor } from 'lucide-react';
 import { Psd } from 'ag-psd';
 
 interface PreviewAreaProps {
+    activeTabId: string;
     psd: Psd | null;
     isLoading: boolean;
     scrollRef: React.RefObject<HTMLDivElement | null>;
@@ -13,7 +14,7 @@ interface PreviewAreaProps {
 }
 
 export const PreviewArea: React.FC<PreviewAreaProps> = ({
-    psd, isLoading, scrollRef, canvasContainerRef, canvasRef, SCROLL_AREA, L
+    activeTabId, psd, isLoading, scrollRef, canvasContainerRef, canvasRef, SCROLL_AREA, L
 }) => {
     return (
         <div 
@@ -31,7 +32,11 @@ export const PreviewArea: React.FC<PreviewAreaProps> = ({
                     </div>
                 </div>
             ) : psd ? (
-                <div className="preview-scroll-inner" style={{ width: SCROLL_AREA, height: SCROLL_AREA, position: 'relative' }}>
+                <div
+                    key={activeTabId}
+                    className="preview-scroll-inner preview-tab-fade-in"
+                    style={{ width: SCROLL_AREA, height: SCROLL_AREA, position: 'relative' }}
+                >
                     <div
                         ref={canvasContainerRef}
                         className="canvas-container"

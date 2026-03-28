@@ -927,6 +927,20 @@ button:active {
     background-size: 20px 20px;
 }
 
+/* タブ切り替え時の軽いフェード（レイアウト同期後の視覚的なつながり用） */
+@keyframes preview-tab-fade-in {
+    from {
+        opacity: 0.88;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.preview-tab-fade-in {
+    animation: preview-tab-fade-in 140ms ease-out;
+}
+
 /* Canvas wrapper */
 .canvas-container {
     outline: 1px solid var(--line-mid);
@@ -2583,13 +2597,26 @@ canvas {
     border: 2px solid var(--bg-panel);
 }
 
+.settings-quality-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.settings-quality-value {
+    min-width: 36px;
+    text-align: right;
+    font-size: 11px;
+    color: var(--fg-2);
+    font-variant-numeric: tabular-nums;
+}
+
 /* SVG 注意書き */
 .settings-export-note {
     margin-top: 8px;
     padding: 7px 9px;
-    background: var(--hover);
+    background: transparent;
     border: 1px solid var(--line);
-    border-left: 2px solid var(--accent);
     border-radius: 4px;
     font-size: 10px;
     font-weight: 300;

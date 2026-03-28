@@ -1,18 +1,17 @@
 /**
  * VirtualLayerList.tsx
- * 自前実装の仮想スクロール付きレイヤーリスト
+ * 仮想スクロール付きレイヤーリスト（ドラッグ中は全行描画して DnD の座標検出を維持）
  */
 import React, {
-    memo, useMemo, useCallback, useRef, useEffect, useState
+    memo, useMemo, useCallback, useRef, useEffect, useState, forwardRef,
 } from 'react';
 import {
     ChevronDown, ChevronRight, Eye, EyeOff,
     Image as ImageIcon, Folder as FolderIcon,
+    Trash2, GripVertical,
 } from 'lucide-react';
+import type { DropTargetInfo } from './types';
 
-// ────────────────────────────────────────────────────────────
-// 型定義
-// ────────────────────────────────────────────────────────────
 export interface FlatLayer {
     layer: any;
     path: number[];
@@ -30,25 +29,19 @@ interface VirtualLayerListProps {
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
     onRadioSelect: (path: number[], siblings: any[]) => void;
-    onToggleOpen: (key: string) => void;
+    onToggleExpand: (key: string) => void;
+    onDelete: (path: number[]) => void;
+    onDragStart: (e: React.MouseEvent, path: number[]) => void;
+    draggingPath: number[] | null;
+    dropTarget: DropTargetInfo | null;
     height: number;
+    className?: string;
 }
 
-// CSSの .layer-item { padding: 0.5rem 0.75rem } + border 1px = 実測値に合わせる
-// ブラウザの DevTools で .layer-item の offsetHeight を確認して調整
 const ITEM_HEIGHT = 36;
-const OVERSCAN = 6;
+const OVERSCAN = 8;
 
-// ────────────────────────────────────────────────────────────
-// サムネイルセル
-// ────────────────────────────────────────────────────────────
-// サムネイルセル（動的アスペクト比対応版）
-//
-// 高さを THUMB_H に固定し、幅をビットマップのアスペクト比から
-// 動的に計算する（最小 THUMB_H、最大 THUMB_MAX_W）。
-// これにより縦長・横長・正方形どのレイヤーも正しく表示される。
-// ────────────────────────────────────────────────────────────
-const THUMB_SIZE = 28; // コンテナは常に 28×28 固定
+const THUMB_SIZE = 28;
 
 const LayerThumbnailCell = memo(({
     bitmap, hasChildren,
@@ -61,13 +54,10 @@ const LayerThumbnailCell = memo(({
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // 論理サイズを 28×28 に固定
         canvas.width = THUMB_SIZE;
         canvas.height = THUMB_SIZE;
         ctx.clearRect(0, 0, THUMB_SIZE, THUMB_SIZE);
 
-        // object-fit: contain 相当の計算
-        // アスペクト比を維持しながら 28×28 に収め、余白は空白のまま
         const bw = bitmap.width;
         const bh = bitmap.height;
         const scale = Math.min(THUMB_SIZE / bw, THUMB_SIZE / bh);
@@ -79,7 +69,6 @@ const LayerThumbnailCell = memo(({
     }, [bitmap]);
 
     return (
-        // コンテナは CSS クラスの 28×28 固定サイズをそのまま使う
         <div className="layer-preview-thumbnail" style={{ flexShrink: 0 }}>
             {bitmap ? (
                 <canvas
@@ -97,9 +86,6 @@ const LayerThumbnailCell = memo(({
     );
 });
 
-// ────────────────────────────────────────────────────────────
-// 1行レイヤーアイテム
-// ────────────────────────────────────────────────────────────
 interface LayerRowProps {
     flatLayer: FlatLayer;
     radioEnabled: boolean;
@@ -107,13 +93,18 @@ interface LayerRowProps {
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
     onRadioSelect: (path: number[], siblings: any[]) => void;
-    onToggleOpen: (key: string) => void;
+    onToggleExpand: (key: string) => void;
+    onDelete: (path: number[]) => void;
+    onDragStart: (e: React.MouseEvent, path: number[]) => void;
+    draggingPath: number[] | null;
+    dropTarget: DropTargetInfo | null;
     top: number;
 }
 
 const LayerRow = memo(({
     flatLayer, radioEnabled, lockedEnabled,
-    onToggle, onRename, onRadioSelect, onToggleOpen, top,
+    onToggle, onRename, onRadioSelect, onToggleExpand, onDelete, onDragStart,
+    draggingPath, dropTarget, top,
 }: LayerRowProps) => {
     const { layer, path, siblings, depth, hasChildren, isOpen, key } = flatLayer;
 
@@ -121,6 +112,11 @@ const LayerRow = memo(({
     const isRadio = radioEnabled && name.startsWith('*');
     const isLocked = lockedEnabled && name.startsWith('!');
     const displayName = (isRadio || isLocked) ? name.slice(1) : name;
+
+    const isDraggingThis = draggingPath?.join('-') === key;
+    const isDropBefore = dropTarget?.path.join('-') === key && dropTarget.position === 'before';
+    const isDropAfter = dropTarget?.path.join('-') === key && dropTarget.position === 'after';
+    const isDropInside = dropTarget?.path.join('-') === key && dropTarget.position === 'inside';
 
     const handleVisibilityClick = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -134,10 +130,20 @@ const LayerRow = memo(({
         onRename(path, prefix + e.target.value);
     }, [isRadio, isLocked, path, onRename]);
 
-    const handleToggleOpen = useCallback((e: React.MouseEvent) => {
+    const handleToggleExpand = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
-        onToggleOpen(key);
-    }, [onToggleOpen, key]);
+        onToggleExpand(key);
+    }, [onToggleExpand, key]);
+
+    const handleDelete = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        onDelete(path);
+    }, [onDelete, path]);
+
+    const handleDragStart = useCallback((e: React.MouseEvent) => {
+        (document.activeElement as HTMLElement)?.blur();
+        onDragStart(e, path);
+    }, [onDragStart, path]);
 
     return (
         <div
@@ -147,27 +153,41 @@ const LayerRow = memo(({
                 left: 0,
                 right: 0,
                 height: ITEM_HEIGHT,
-                // インデントは外側ラッパーで吸収してCSSに干渉させない
                 paddingLeft: depth * 20,
                 boxSizing: 'border-box',
             }}
         >
+            {isDropBefore && <div className="drop-indicator" />}
             <div
-                className={`layer-item ${isLocked ? 'layer-locked' : ''} ${isRadio ? 'layer-radio' : ''}`}
+                className={[
+                    'layer-item',
+                    isLocked ? 'layer-locked' : '',
+                    isRadio ? 'layer-radio' : '',
+                    isDraggingThis ? 'layer-dragging' : '',
+                    isDropInside ? 'layer-drop-inside' : '',
+                ].filter(Boolean).join(' ')}
+                data-path={key}
+                data-group={hasChildren ? 'true' : 'false'}
                 style={{
                     height: '100%',
-                    // [FIX] flex コンテナの幅を 100% に固定
                     width: '100%',
                     boxSizing: 'border-box',
-                    // margin をリセットして行高さのズレを防ぐ
                     marginBottom: 0,
                 }}
+                onMouseDown={(e: React.MouseEvent) => {
+                    if ((e.target as HTMLElement).tagName !== 'INPUT')
+                        (document.activeElement as HTMLElement)?.blur();
+                }}
             >
-                {/* 展開ボタン or スペーサー（固定幅で縮まない） */}
+                <span className="drag-handle" onMouseDown={handleDragStart} title="Drag to reorder">
+                    <GripVertical size={12} />
+                </span>
+
                 {hasChildren ? (
                     <button
+                        type="button"
                         className="toggle-expand"
-                        onClick={handleToggleOpen}
+                        onClick={handleToggleExpand}
                         style={{ flexShrink: 0 }}
                     >
                         {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -176,7 +196,6 @@ const LayerRow = memo(({
                     <span style={{ width: 24, flexShrink: 0, display: 'inline-block' }} />
                 )}
 
-                {/* 表示/非表示トグル（固定幅） */}
                 {!isLocked ? (
                     <div
                         className="visibility-toggle"
@@ -198,10 +217,8 @@ const LayerRow = memo(({
                     </span>
                 )}
 
-                {/* サムネイル（固定幅） */}
-                <LayerThumbnailCell bitmap={layer._thumb} hasChildren={hasChildren} />
+                <LayerThumbnailCell bitmap={layer._bitmap} hasChildren={hasChildren} />
 
-                {/* レイヤー名: min-width:0 で flex 縮小を許可し、はみ出しを防ぐ */}
                 <input
                     type="text"
                     className="layer-name-input"
@@ -216,42 +233,80 @@ const LayerRow = memo(({
                         whiteSpace: 'nowrap',
                     }}
                 />
+
+                <button
+                    type="button"
+                    className="layer-delete-btn"
+                    onClick={handleDelete}
+                    title="Delete layer"
+                    onMouseDown={(e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        (document.activeElement as HTMLElement)?.blur();
+                    }}
+                >
+                    <Trash2 size={12} />
+                </button>
             </div>
+            {isDropAfter && <div className="drop-indicator" />}
         </div>
     );
-}, (prev, next) =>
-    prev.flatLayer.layer === next.flatLayer.layer &&
-    prev.flatLayer.isOpen === next.flatLayer.isOpen &&
-    prev.radioEnabled === next.radioEnabled &&
-    prev.lockedEnabled === next.lockedEnabled &&
-    prev.top === next.top
-);
+}, (prev, next) => {
+    const dtEq = (a: DropTargetInfo | null, b: DropTargetInfo | null) => {
+        if (a === b) return true;
+        if (!a || !b) return false;
+        return a.position === b.position && a.path.join('-') === b.path.join('-');
+    };
+    return (
+        prev.flatLayer.layer === next.flatLayer.layer &&
+        prev.flatLayer.isOpen === next.flatLayer.isOpen &&
+        prev.radioEnabled === next.radioEnabled &&
+        prev.lockedEnabled === next.lockedEnabled &&
+        prev.top === next.top &&
+        (prev.draggingPath?.join('-') ?? '') === (next.draggingPath?.join('-') ?? '') &&
+        dtEq(prev.dropTarget, next.dropTarget)
+    );
+});
 
-// ────────────────────────────────────────────────────────────
-// 仮想スクロールコンテナ
-// ────────────────────────────────────────────────────────────
-export const VirtualLayerList = memo(({
-    flatLayers, radioEnabled, lockedEnabled,
-    onToggle, onRename, onRadioSelect, onToggleOpen, height,
-}: VirtualLayerListProps) => {
+const VirtualLayerListInner = memo(forwardRef<HTMLDivElement, VirtualLayerListProps>(function VirtualLayerList(
+    {
+        flatLayers,
+        radioEnabled,
+        lockedEnabled,
+        onToggle,
+        onRename,
+        onRadioSelect,
+        onToggleExpand,
+        onDelete,
+        onDragStart,
+        draggingPath,
+        dropTarget,
+        height,
+        className,
+    },
+    ref,
+) {
     const [scrollTop, setScrollTop] = useState(0);
     const totalHeight = flatLayers.length * ITEM_HEIGHT;
+    const dragging = draggingPath != null;
 
     const { startIndex, endIndex } = useMemo(() => {
+        if (dragging || flatLayers.length === 0) {
+            return { startIndex: 0, endIndex: Math.max(0, flatLayers.length - 1) };
+        }
         const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
         const end = Math.min(
             flatLayers.length - 1,
             start + Math.ceil(height / ITEM_HEIGHT) + OVERSCAN * 2,
         );
         return { startIndex: start, endIndex: end };
-    }, [scrollTop, height, flatLayers.length]);
+    }, [scrollTop, height, flatLayers.length, dragging]);
 
     const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
         setScrollTop(e.currentTarget.scrollTop);
     }, []);
 
     const visibleRows = useMemo(() => {
-        const rows = [];
+        const rows: React.ReactNode[] = [];
         for (let i = startIndex; i <= endIndex; i++) {
             const fl = flatLayers[i];
             if (!fl) continue;
@@ -264,34 +319,43 @@ export const VirtualLayerList = memo(({
                     onToggle={onToggle}
                     onRename={onRename}
                     onRadioSelect={onRadioSelect}
-                    onToggleOpen={onToggleOpen}
+                    onToggleExpand={onToggleExpand}
+                    onDelete={onDelete}
+                    onDragStart={onDragStart}
+                    draggingPath={draggingPath}
+                    dropTarget={dropTarget}
                     top={i * ITEM_HEIGHT}
-                />
+                />,
             );
         }
         return rows;
-    }, [startIndex, endIndex, flatLayers, radioEnabled, lockedEnabled,
-        onToggle, onRename, onRadioSelect, onToggleOpen]);
+    }, [
+        startIndex, endIndex, flatLayers, radioEnabled, lockedEnabled,
+        onToggle, onRename, onRadioSelect, onToggleExpand, onDelete, onDragStart,
+        draggingPath, dropTarget,
+    ]);
 
     return (
         <div
-            style={{ height, overflowY: 'auto', overflowX: 'hidden' }}
+            ref={ref}
+            className={className ?? 'layer-scroll'}
+            style={{ height, overflowY: 'auto', overflowX: 'hidden', minHeight: 0, padding: '3px 0' }}
             onScroll={handleScroll}
         >
-            {/* [FIX] totalHeight で全アイテム分の高さを確保してスクロール量を正確にする */}
             <div style={{ position: 'relative', height: totalHeight }}>
                 {visibleRows}
             </div>
         </div>
     );
-});
+}));
 
-// ────────────────────────────────────────────────────────────
-// ツリー → フラット配列変換
-// ────────────────────────────────────────────────────────────
+VirtualLayerListInner.displayName = 'VirtualLayerList';
+
+export const VirtualLayerList = VirtualLayerListInner;
+
 export function flattenLayers(
     layers: any[],
-    openKeys: Set<string>,
+    closedKeys: Set<string>,
     flipEnabled: boolean,
     hasFlipSuffix: (name: string) => boolean,
     parentPath: number[] = [],
@@ -306,7 +370,7 @@ export function flattenLayers(
         const path = [...parentPath, originalIndex];
         const key = path.join('-');
         const hasChildren = !!(layer.children?.length);
-        const isOpen = openKeys.has(key);
+        const isOpen = !closedKeys.has(key);
 
         if (flipEnabled && hasFlipSuffix(layer.name || '')) return;
 
@@ -314,7 +378,7 @@ export function flattenLayers(
 
         if (hasChildren && isOpen) {
             result.push(...flattenLayers(
-                layer.children, openKeys, flipEnabled, hasFlipSuffix,
+                layer.children, closedKeys, flipEnabled, hasFlipSuffix,
                 path, depth + 1, layer.children,
             ));
         }

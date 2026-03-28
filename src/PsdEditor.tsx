@@ -9,7 +9,7 @@
  *   5. SettingsModal に onPreview（テーマ即時プレビュー）を渡す
  */
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { listen } from '@tauri-apps/api/event';
@@ -119,7 +119,16 @@ const PsdEditor = () => {
 
     // ── タブ管理 ──
     const tabManager = useTabManager();
-    const { tabs, activeId, activeTab } = tabManager;
+    const { tabs, activeId, updateTab } = tabManager;
+    const tabsRef = useRef(tabs);
+    tabsRef.current = tabs;
+    const activeIdRef = useRef(activeId);
+    activeIdRef.current = activeId;
+
+    /** 同一タブに複数読み込みが走ったとき古い結果を捨てる（世代番号） */
+    const loadGenByTabRef = useRef<Map<string, number>>(new Map());
+    /** 並行読み込み数 — いずれかが終わるまでプレビューはローディング表示 */
+    const loadCountRef = useRef(0);
 
     const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
     const { favorites, saveFavorite, deleteFavorite, updateFavoriteName, moveFavoriteTo } = useLayerFavorites(currentFilePath);
@@ -153,6 +162,11 @@ const PsdEditor = () => {
     const favoriteDragStateRef = useRef<{ id: string; startY: number; moved: boolean } | null>(null);
     const drawDirtyRef = useRef(false);
     const drawRafRef   = useRef<number | null>(null);
+    const centerRafRef = useRef<number | null>(null);
+    const zoomSelectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const resizeCleanupRef = useRef<(() => void) | null>(null);
+    const layerDragCleanupRef = useRef<(() => void) | null>(null);
+    const favoriteDragCleanupRef = useRef<(() => void) | null>(null);
 
     const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
@@ -170,9 +184,12 @@ const PsdEditor = () => {
         const tryCenter = () => {
             attempts++;
             if (el.clientWidth > 0 && el.clientHeight > 0) { centerPsd(); return; }
-            if (attempts < 10) requestAnimationFrame(tryCenter);
+            if (attempts < 10) centerRafRef.current = requestAnimationFrame(tryCenter);
         };
-        requestAnimationFrame(tryCenter);
+        centerRafRef.current = requestAnimationFrame(tryCenter);
+        return () => {
+            if (centerRafRef.current) cancelAnimationFrame(centerRafRef.current);
+        };
     }, [psd, centerPsd]);
 
     const appWindow = getCurrentWindow();
@@ -191,7 +208,8 @@ const PsdEditor = () => {
     const handleZoomInputFocus = useCallback(() => {
         setZoomInputValue(String(Math.round(zoom * 100)));
         setZoomInputActive(true);
-        setTimeout(() => zoomInputRef.current?.select(), 0);
+        if (zoomSelectTimerRef.current) clearTimeout(zoomSelectTimerRef.current);
+        zoomSelectTimerRef.current = setTimeout(() => zoomInputRef.current?.select(), 0);
     }, [zoom]);
 
     const handleZoomInputCommit = useCallback(() => {
@@ -233,6 +251,15 @@ const PsdEditor = () => {
     }, [searchQuery, psd]);
 
     const lang = settings.language;
+    const exportFormat = (settings.exportFormat ?? 'png') as ExportFormat;
+    const exportButtonLabel = useMemo(() => {
+        const labelMap: Record<ExportFormat, string> = { png: 'PNG', jpeg: 'JPG', webp: 'WebP', svg: 'SVG' };
+        return labelMap[exportFormat];
+    }, [exportFormat]);
+    const exportAriaLabel = useMemo(() => {
+        const label = exportButtonLabel;
+        return lang === 'ja' ? `${label}で書き出し` : `Export as ${label}`;
+    }, [exportButtonLabel, lang]);
     const L = useMemo(() => ({
         open: lang === 'ja' ? '開く' : 'Open',
         png: 'PNG',
@@ -285,24 +312,28 @@ const PsdEditor = () => {
     // ── タブ切り替え時の状態保存 / 復元 ────────────────────────────────────
 
     const prevActiveIdRef = useRef<string>(activeId);
+    const outgoingUiRef = useRef({
+        zoom, flipX, flipY, closedKeys: Array.from(closedKeys),
+    });
+    outgoingUiRef.current = { zoom, flipX, flipY, closedKeys: Array.from(closedKeys) };
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const prevId = prevActiveIdRef.current;
         if (prevId === activeId) return;
-        prevActiveIdRef.current = activeId;
 
-        // 旧タブ: 現在の状態を保存
-        tabManager.saveActiveUiState({
-            zoom,
-            flipX,
-            flipY,
-            closedKeys: Array.from(closedKeys),
+        const { zoom: z, flipX: fx, flipY: fy, closedKeys: ck } = outgoingUiRef.current;
+        updateTab(prevId, {
+            zoom: z,
+            flipX: fx,
+            flipY: fy,
+            closedKeys: ck,
             scrollLeft: scrollRef.current?.scrollLeft ?? 0,
-            scrollTop:  scrollRef.current?.scrollTop ?? 0,
+            scrollTop: scrollRef.current?.scrollTop ?? 0,
         });
 
-        // 新タブ: 状態を復元
-        const nextTab = tabs.find(t => t.id === activeId);
+        prevActiveIdRef.current = activeId;
+
+        const nextTab = tabsRef.current.find(t => t.id === activeId);
         if (!nextTab) return;
 
         resetHistory(nextTab.psd);
@@ -310,17 +341,15 @@ const PsdEditor = () => {
         setFlipX(nextTab.flipX);
         setFlipY(nextTab.flipY);
         setClosedKeys(new Set(nextTab.closedKeys));
-        isFirstLoadRef.current = true; // 新タブは中央に配置
+        isFirstLoadRef.current = true;
 
-        // ズーム・スクロール復元は次のフレームで
-        requestAnimationFrame(() => {
-            setZoomTo(nextTab.zoom);
-            if (scrollRef.current) {
-                scrollRef.current.scrollLeft = nextTab.scrollLeft;
-                scrollRef.current.scrollTop  = nextTab.scrollTop;
-            }
-        });
-    }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
+        setZoomTo(nextTab.zoom);
+        const el = scrollRef.current;
+        if (el) {
+            el.scrollLeft = nextTab.scrollLeft;
+            el.scrollTop = nextTab.scrollTop;
+        }
+    }, [activeId, updateTab, resetHistory, setZoomTo]);
 
     // ── PSD 読み込み ───────────────────────────────────────────────────────
 
@@ -332,16 +361,27 @@ const PsdEditor = () => {
         const targetId = tabId ?? tabManager.openNewTab({ filePath, fileName: filePath.replace(/\\/g, '/').split('/').pop() ?? filePath, isLoading: true });
         tabManager.updateTab(targetId, { isLoading: true });
 
+        const g = (loadGenByTabRef.current.get(targetId) ?? 0) + 1;
+        loadGenByTabRef.current.set(targetId, g);
+
+        loadCountRef.current += 1;
         setIsLoading(true);
         isFirstLoadRef.current = true;
 
+        const tabStillTargeted = () =>
+            loadGenByTabRef.current.get(targetId) === g;
+
         try {
             const data = await readFile(filePath);
-            const result = await loadPsd(data.buffer);
-            const nextPsd = result.layers.length > 0 ? attachThumbs(result.psd, result.layers) : result.psd;
+            if (!tabStillTargeted()) return;
 
-            // アクティブタブが対象タブなら直接 resetHistory
-            if (tabManager.activeId === targetId) {
+            const result = await loadPsd(data.buffer);
+            if (!tabStillTargeted()) return;
+
+            const nextPsd = result.layers.length > 0 ? attachThumbs(result.psd, result.layers) : result.psd;
+            if (!tabStillTargeted()) return;
+
+            if (activeIdRef.current === targetId) {
                 resetHistory(nextPsd);
             }
 
@@ -353,15 +393,36 @@ const PsdEditor = () => {
                 isDirty: false,
             });
             addRecentFile(filePath);
-            if (tabManager.activeId === targetId) {
+            if (activeIdRef.current === targetId) {
                 setCurrentFilePath(filePath);
             }
         } catch (err) {
-            showToast(`${L.loadFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error');
-            tabManager.updateTab(targetId, { isLoading: false });
+            if (tabStillTargeted()) {
+                showToast(`${L.loadFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error');
+                tabManager.updateTab(targetId, { isLoading: false });
+            }
+        } finally {
+            if (loadGenByTabRef.current.get(targetId) === g) {
+                loadGenByTabRef.current.delete(targetId);
+            }
+            loadCountRef.current -= 1;
+            if (loadCountRef.current <= 0) {
+                loadCountRef.current = 0;
+                setIsLoading(false);
+            }
         }
-        setIsLoading(false);
     }, [loadPsd, resetHistory, addRecentFile, showToast, L, tabManager]);
+
+    const openPsdUnified = useCallback((filePath: string) => {
+        const activeTab = tabsRef.current.find(t => t.id === activeIdRef.current);
+        const canReuseActive =
+            !!activeTab &&
+            !activeTab.isLoading &&
+            !activeTab.filePath &&
+            !activeTab.psd;
+        const targetId = canReuseActive ? activeTab.id : undefined;
+        loadPsdFromFilePath(filePath, targetId);
+    }, [loadPsdFromFilePath]);
 
     // ── タブ新規作成 ────────────────────────────────────────────────────────
 
@@ -376,7 +437,10 @@ const PsdEditor = () => {
     // ── タブ閉じる ──────────────────────────────────────────────────────────
 
     const handleCloseTab = useCallback((id: string) => {
-        tabManager.closeTab(id);
+        loadGenByTabRef.current.delete(id);
+        startTransition(() => {
+            tabManager.closeTab(id);
+        });
     }, [tabManager]);
 
     // ── タブ アクティブ切り替え ─────────────────────────────────────────────
@@ -392,7 +456,7 @@ const PsdEditor = () => {
             try {
                 const args: string[] = await invoke('get_launch_args');
                 const psdFile = args.slice(1).find(x => x.toLowerCase().endsWith('.psd'));
-                if (psdFile) loadPsdFromFilePath(psdFile, activeId);
+                if (psdFile) openPsdUnified(psdFile);
             } catch (e) { console.error('Failed to get launch args', e); }
         };
         checkArgs();
@@ -401,11 +465,11 @@ const PsdEditor = () => {
     useEffect(() => {
         const unlistenPromise = listen<string[]>('open-file', (event) => {
             const psdFile = event.payload.slice(1).find(x => x.toLowerCase().endsWith('.psd'));
-            if (psdFile) loadPsdFromFilePath(psdFile);
+            if (psdFile) openPsdUnified(psdFile);
             getCurrentWindow().setFocus();
         });
         return () => { unlistenPromise.then(u => u()); };
-    }, [loadPsdFromFilePath]);
+    }, [openPsdUnified]);
 
     useEffect(() => {
         const unlistenPromises = Promise.all([
@@ -414,23 +478,21 @@ const PsdEditor = () => {
                 setIsDragging(false);
                 const paths = event.payload.paths;
                 if (paths?.length > 0 && paths[0].toLowerCase().endsWith('.psd'))
-                    loadPsdFromFilePath(paths[0]);
+                    openPsdUnified(paths[0]);
             }),
             listen('tauri://drag-leave', () => setIsDragging(false)),
         ]);
         return () => { unlistenPromises.then(us => us.forEach(u => u())); };
-    }, [loadPsdFromFilePath]);
+    }, [openPsdUnified]);
 
     const handleOpenFile = useCallback(async () => {
         try {
             const selected = await open({ multiple: false, filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
             if (selected && typeof selected === 'string') {
-                // 現在のタブが空なら上書き、そうでなければ新規タブ
-                const useCurrentTab = !psd && !isLoading;
-                loadPsdFromFilePath(selected, useCurrentTab ? activeId : undefined);
+                openPsdUnified(selected);
             }
         } catch (err) { showToast(`${L.openFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
-    }, [loadPsdFromFilePath, showToast, L, psd, isLoading, activeId]);
+    }, [openPsdUnified, showToast, L]);
 
     // ── キーボードショートカット ────────────────────────────────────────────
 
@@ -449,9 +511,16 @@ const PsdEditor = () => {
             if (e.key === 'F11') { e.preventDefault(); handleToggleFullscreen(); return; }
             if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleOpenFile(); return; }
             if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setShowSettings(true); return; }
+            // ブラウザ標準ショートカット無効化
+            if (e.key === 'F5') { e.preventDefault(); return; }
+            if (e.key === 'F12') { e.preventDefault(); return; }
+            if (e.key.toLowerCase() === 'p' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
+            if (e.key.toLowerCase() === 'f' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
+            if (e.key.toLowerCase() === 'r' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
+            if (e.key.toLowerCase() === 'i' && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); return; }
             // Zoom
-            if ((e.key === '+' || e.key === ';' || e.key === '=') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(0.1); return; }
-            if (e.key === '-' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(-0.1); return; }
+            if ((e.key === '+' || e.key === ';') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(0.1); return; }
+            if ((e.key === '=' || e.key === '-') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(-0.1); return; }
             if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); centerPsd(); return; }
             // タブ切り替え Ctrl+Tab / Ctrl+Shift+Tab
             if (e.key === 'Tab' && e.ctrlKey) {
@@ -487,13 +556,19 @@ const PsdEditor = () => {
             setSidebarWidth(Math.max(200, Math.min(600, ev.clientX)));
         };
         const onMouseUp = () => {
+            if (resizeCleanupRef.current) {
+                resizeCleanupRef.current();
+                resizeCleanupRef.current = null;
+            }
+        };
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        resizeCleanupRef.current = () => {
             isResizingRef.current = false;
             document.body.style.cursor = '';
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
         };
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
     }, []);
 
     // ── 保存 ────────────────────────────────────────────────────────────────
@@ -652,8 +727,10 @@ const PsdEditor = () => {
         const onMouseUp = (ev: MouseEvent) => {
             const state = dragStateRef.current; dragStateRef.current = null;
             setDraggingPath(null); setDropTarget(null);
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
+            if (layerDragCleanupRef.current) {
+                layerDragCleanupRef.current();
+                layerDragCleanupRef.current = null;
+            }
             if (!state?.moved) return;
             const target = findDropTargetFromCache(ev.clientY);
             if (!target) return;
@@ -665,6 +742,10 @@ const PsdEditor = () => {
         };
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
+        layerDragCleanupRef.current = () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
     }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd, tabManager]);
 
     // ── フリップ関連 ────────────────────────────────────────────────────────
@@ -682,8 +763,14 @@ const PsdEditor = () => {
         const currentPsd = psdRef.current;
         if (!canvas || !currentPsd) return;
         const ctx = canvas.getContext('2d'); if (!ctx) return;
-        canvas.width = currentPsd.width; canvas.height = currentPsd.height;
-        ctx.clearRect(0, 0, currentPsd.width, currentPsd.height);
+        const w = currentPsd.width;
+        const h = currentPsd.height;
+        if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+        } else {
+            ctx.clearRect(0, 0, w, h);
+        }
         const flipSuffix = flipEnabled ? getFlipSuffix() : '';
         ctx.save();
         if (flipX && flipY) { ctx.translate(currentPsd.width, currentPsd.height); ctx.scale(-1, -1); }
@@ -788,8 +875,10 @@ const PsdEditor = () => {
             const state = favoriteDragStateRef.current; favoriteDragStateRef.current = null;
             const target = findFavoriteDropTarget(ev.clientY);
             setFavoriteDrop(null);
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
+            if (favoriteDragCleanupRef.current) {
+                favoriteDragCleanupRef.current();
+                favoriteDragCleanupRef.current = null;
+            }
             if (!state?.moved || !target || target.id === state.id) return;
             const from = favorites.findIndex(f => f.id === state.id);
             let to = favorites.findIndex(f => f.id === target.id);
@@ -800,7 +889,25 @@ const PsdEditor = () => {
         };
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
+        favoriteDragCleanupRef.current = () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
     }, [cacheFavoriteRects, findFavoriteDropTarget, favorites, moveFavoriteTo]);
+
+    // ── Cleanup (avoid leaks on unmount) ─────────────────────────────────────
+
+    useEffect(() => {
+        return () => {
+            if (zoomSelectTimerRef.current) clearTimeout(zoomSelectTimerRef.current);
+            if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
+            if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
+            if (centerRafRef.current) cancelAnimationFrame(centerRafRef.current);
+            if (resizeCleanupRef.current) resizeCleanupRef.current();
+            if (layerDragCleanupRef.current) layerDragCleanupRef.current();
+            if (favoriteDragCleanupRef.current) favoriteDragCleanupRef.current();
+        };
+    }, []);
 
     // ── テーマ即時プレビュー ────────────────────────────────────────────────
 
@@ -814,7 +921,7 @@ const PsdEditor = () => {
         <div className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}>
             <EditorHeader
                 psd={psd} recentFiles={recentFiles} handleOpenFile={handleOpenFile}
-                loadPsdFromFilePath={loadPsdFromFilePath} clearRecentFiles={clearRecentFiles}
+                loadPsdFromFilePath={openPsdUnified} clearRecentFiles={clearRecentFiles}
                 language={settings.language} flipX={flipX} setFlipX={setFlipX} flipY={flipY} setFlipY={setFlipY}
                 handleZoom={handleZoom} zoomInputActive={zoomInputActive} zoomInputRef={zoomInputRef}
                 zoomInputValue={zoomInputValue} setZoomInputValue={setZoomInputValue}
@@ -823,6 +930,8 @@ const PsdEditor = () => {
                 isFullscreen={isFullscreen} setShowSettings={setShowSettings}
                 handleExportPng={handleExportPng} handleSaveFile={handleSaveFile}
                 setZoomInputActive={setZoomInputActive} L={L}
+                exportButtonLabel={exportButtonLabel}
+                exportAriaLabel={exportAriaLabel}
             />
 
             {/* ── タブバー ── */}
@@ -863,6 +972,7 @@ const PsdEditor = () => {
                 <div className="sidebar-resizer" onMouseDown={handleResizerMouseDown} />
 
                 <PreviewArea
+                    activeTabId={activeId}
                     psd={psd} isLoading={isLoading} scrollRef={scrollRef}
                     canvasContainerRef={canvasContainerRef} canvasRef={canvasRef}
                     SCROLL_AREA={SCROLL_AREA} L={L}

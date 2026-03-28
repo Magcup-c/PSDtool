@@ -35,6 +35,8 @@ interface EditorHeaderProps {
     handleExportPng: () => void;
     handleSaveFile: () => void;
     setZoomInputActive: (val: boolean) => void;
+    exportButtonLabel: string;
+    exportAriaLabel: string;
     L: any; // Translation object
 }
 
@@ -43,7 +45,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
     flipX, setFlipX, flipY, setFlipY, handleZoom, zoomInputActive, zoomInputRef,
     zoomInputValue, setZoomInputValue, handleZoomInputCommit, handleZoomInputFocus,
     zoom, resetZoom, handleToggleFullscreen, isFullscreen, setShowSettings,
-    handleExportPng, handleSaveFile, setZoomInputActive, L
+    handleExportPng, handleSaveFile, setZoomInputActive, exportButtonLabel, exportAriaLabel, L
 }) => {
     const appWindow = getCurrentWindow();
 
@@ -180,10 +182,10 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
                             <button 
                                 onClick={handleExportPng} 
                                 className="btn-secondary"
-                                aria-label="Export as PNG"
+                                aria-label={exportAriaLabel}
                             >
                                 <Download size={18} />
-                                <span>{L.png}</span>
+                                <span>{exportButtonLabel}</span>
                             </button>
                             <button 
                                 onClick={handleSaveFile} 

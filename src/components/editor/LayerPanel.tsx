@@ -1,9 +1,10 @@
-import { 
-    Plus, FolderPlus, ChevronsUpDown, ChevronsDownUp, Star, Search, X, 
-    Asterisk, Pin, Replace, GripVertical, Pencil, Trash2 
+import { useMemo, useLayoutEffect, useState, useRef } from 'react';
+import {
+    Plus, FolderPlus, ChevronsUpDown, ChevronsDownUp, Star, Search, X,
+    Asterisk, Pin, Replace, GripVertical, Pencil, Trash2,
 } from 'lucide-react';
 import { SearchResultRow } from '../SearchResultRow';
-import { LayerItem } from '../LayerItem';
+import { VirtualLayerList, flattenLayers } from '../../VirtualLayerList';
 import { DropTargetInfo, SearchResult } from '../../types';
 import { LayerFavorite } from '../../hooks/useLayerFavorites';
 import { Psd } from 'ag-psd';
@@ -60,6 +61,25 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
     handleFavoriteDragStart, favoriteDrop, favoriteListRef, layerScrollRef,
     formatFavoriteTime, lang, L
 }) => {
+    const layerResizeRef = useRef<HTMLDivElement>(null);
+    const [layerListHeight, setLayerListHeight] = useState(400);
+
+    useLayoutEffect(() => {
+        const el = layerResizeRef.current;
+        if (!el) return;
+        const ro = new ResizeObserver(() => {
+            setLayerListHeight(Math.max(0, el.clientHeight));
+        });
+        ro.observe(el);
+        setLayerListHeight(Math.max(0, el.clientHeight));
+        return () => ro.disconnect();
+    }, []);
+
+    const flatLayers = useMemo(() => {
+        if (!psd?.children?.length) return [];
+        return flattenLayers(psd.children, closedKeys, flipEnabled, hasFlipSuffix);
+    }, [psd, closedKeys, flipEnabled, hasFlipSuffix]);
+
     return (
         <div className="layer-panel" style={{ width, minWidth: width }}>
             <div className="panel-header">
@@ -241,9 +261,9 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                 </div>
             )}
 
-            <div className="layer-scroll" ref={layerScrollRef}>
+            <div ref={layerResizeRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 {isLoading ? (
-                    <div className="layer-loading">
+                    <div className="layer-scroll layer-loading">
                         {Array.from({ length: 8 }).map((_, i) => (
                             <div key={i} className="layer-shimmer-row" style={{ animationDelay: `${i * 60}ms` }}>
                                 <div className="shimmer-icon" />
@@ -256,45 +276,33 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                 ) : psd && psd.children ? (
                     searchResults ? (
                         searchResults.length > 0 ? (
-                            <div className="search-results-list" role="list">
+                            <div className="layer-scroll search-results-list" role="list">
                                 {searchResults.map((result) => (
                                     <SearchResultRow key={result.path.join('-')} result={result} onToggle={toggleLayerVisibility} />
                                 ))}
                             </div>
                         ) : (
-                            <div className="empty-state"><p>{L.noLayers}</p></div>
+                            <div className="layer-scroll empty-state"><p>{L.noLayers}</p></div>
                         )
                     ) : (
-                        <ul className="layer-list">
-                            {[...psd.children].reverse().map((layer, index, array) => {
-                                const originalIndex = array.length - 1 - index;
-                                if (flipEnabled && hasFlipSuffix(layer.name || '')) return null;
-                                return (
-                                    <LayerItem
-                                        key={originalIndex}
-                                        layer={layer}
-                                        path={[originalIndex]}
-                                        siblings={psd.children!}
-                                        radioEnabled={radioEnabled}
-                                        lockedEnabled={lockedEnabled}
-                                        flipEnabled={flipEnabled}
-                                        closedKeys={closedKeys}
-                                        onToggleExpand={handleToggleExpand}
-                                        onToggle={toggleLayerVisibility}
-                                        onRename={renameLayer}
-                                        onRadioSelect={toggleRadioLayer}
-                                        onDelete={handleDeleteLayer}
-                                        onDragStart={handleLayerDragStart}
-                                        draggingPath={draggingPath}
-                                        dropTarget={dropTarget}
-                                        hasFlipSuffix={hasFlipSuffix}
-                                    />
-                                );
-                            })}
-                        </ul>
+                        <VirtualLayerList
+                            ref={layerScrollRef}
+                            height={layerListHeight}
+                            flatLayers={flatLayers}
+                            radioEnabled={radioEnabled}
+                            lockedEnabled={lockedEnabled}
+                            onToggle={toggleLayerVisibility}
+                            onRename={renameLayer}
+                            onRadioSelect={toggleRadioLayer}
+                            onToggleExpand={handleToggleExpand}
+                            onDelete={handleDeleteLayer}
+                            onDragStart={handleLayerDragStart}
+                            draggingPath={draggingPath}
+                            dropTarget={dropTarget}
+                        />
                     )
                 ) : (
-                    <div className="empty-state"><p>{L.dropPsd}</p></div>
+                    <div className="layer-scroll empty-state"><p>{L.dropPsd}</p></div>
                 )}
             </div>
         </div>

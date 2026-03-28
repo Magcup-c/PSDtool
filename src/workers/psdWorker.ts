@@ -55,6 +55,26 @@ function stripCanvas(layers: any[]): void {
     }
 }
 
+function stripOffscreenCanvasDeep(target: any, seen = new Set<any>()): void {
+    if (!target || typeof target !== 'object') return;
+    if (seen.has(target)) return;
+    seen.add(target);
+
+    if (Array.isArray(target)) {
+        for (const item of target) stripOffscreenCanvasDeep(item, seen);
+        return;
+    }
+
+    for (const key of Object.keys(target)) {
+        const value = (target as any)[key];
+        if (typeof OffscreenCanvas !== 'undefined' && value instanceof OffscreenCanvas) {
+            delete (target as any)[key];
+            continue;
+        }
+        stripOffscreenCanvasDeep(value, seen);
+    }
+}
+
 async function canvasToBitmaps(
     canvas: OffscreenCanvas,
 ): Promise<{ bitmap: ImageBitmap }> {
@@ -117,6 +137,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         // OffscreenCanvas を除去してから postMessage
         if (psd.children) stripCanvas(psd.children);
         if ('canvas' in (psd as any)) delete (psd as any).canvas;
+        // 取りこぼした OffscreenCanvas が残っていると postMessage が失敗するので全体を走査
+        stripOffscreenCanvasDeep(psd);
 
         const transferables: Transferable[] = layers.map((e) => e.bitmap);
 
