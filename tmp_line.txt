@@ -1,1 +1,0 @@
-            showToast(`Copy failed: ${err instanceof Error ? err.message : String(err)}`, 'error');

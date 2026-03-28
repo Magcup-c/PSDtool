@@ -1,11 +1,22 @@
-import { useState } from 'react';
-import { X, Monitor, ZoomIn, Globe, Check, Laptop, HelpCircle } from 'lucide-react';
-import { AppSettings } from '../hooks/useSettings';
+/**
+ * src/components/SettingsModal.tsx  (updated)
+ *
+ * 変更点:
+ *   1. テーマ選択時に即時プレビュー（onPreview コールバック）
+ *   2. 書き出し設定セクションを追加（形式・品質）
+ *   3. Cancel 時にプレビューをロールバック
+ */
+
+import { useState, useCallback } from 'react';
+import { X, Monitor, ZoomIn, Globe, Check, Laptop, HelpCircle, Download } from 'lucide-react';
+import { AppSettings, ExportFormat } from '../hooks/useSettings';
 
 interface SettingsModalProps {
     settings: AppSettings;
     onUpdate: (patch: Partial<AppSettings>) => void;
     onClose: () => void;
+    /** テーマ即時プレビュー用 — モーダルを閉じずにテーマだけ切り替える */
+    onPreview: (theme: AppSettings['theme']) => void;
 }
 
 const T = {
@@ -13,7 +24,7 @@ const T = {
         title: '設定',
         appearance: '外観',
         theme: 'カラーテーマ',
-        themeDesc: '配色テーマ',
+        themeDesc: '配色テーマ（選択で即時プレビュー）',
         canvas: 'キャンバス',
         defaultZoom: '初期ズーム',
         defaultZoomDesc: 'ファイルを開いた時の倍率',
@@ -32,12 +43,7 @@ const T = {
         defaultAppDesc: '.psdファイルを本アプリに関連付けます',
         openOSSettings: 'OSの設定を開く',
         defaultAppNote: '※OS設定の「ファイルの種類ごとに既定のアプリを選ぶ」から、.psdを本アプリに変更してください。',
-        themes: {
-            black: 'Black',
-            grey: 'Grey',
-            light: 'Light',
-            white: 'White',
-        },
+        themes: { black: 'Black', grey: 'Grey', light: 'Light', white: 'White' },
         help: 'ヘルプ',
         shortcuts: 'ショートカット (プレビューエリア)',
         shortcutZoomIn: 'ズームイン',
@@ -49,12 +55,19 @@ const T = {
         scrollActionDesc: 'Ctrl無しのホイール（2本指）操作',
         scrollActionZoom: '拡大・縮小',
         scrollActionPan: '上下移動 (Pan)',
+        // 書き出し
+        exportSection: '書き出し',
+        exportFormat: '書き出し形式',
+        exportFormatDesc: 'PNG / JPEG / WebP / SVG',
+        exportQuality: '品質 (JPEG / WebP)',
+        exportQualityDesc: '数値が大きいほど高品質・大容量',
+        exportFormatLabels: { png: 'PNG', jpeg: 'JPEG', webp: 'WebP', svg: 'SVG' },
     },
     en: {
         title: 'Settings',
         appearance: 'Appearance',
         theme: 'Color Theme',
-        themeDesc: 'Color scheme',
+        themeDesc: 'Color scheme (click to preview instantly)',
         syncTheme: 'Follow OS',
         syncThemeDesc: 'Auto-switch light / dark',
         canvas: 'Canvas',
@@ -73,12 +86,7 @@ const T = {
         defaultAppDesc: 'Associate .psd files with this app',
         openOSSettings: 'Open OS Settings',
         defaultAppNote: 'Note: Go to "Choose default apps by file type" in OS settings and change .psd to this app.',
-        themes: {
-            black: 'Black',
-            grey: 'Grey',
-            light: 'Light',
-            white: 'White',
-        },
+        themes: { black: 'Black', grey: 'Grey', light: 'Light', white: 'White' },
         help: 'Help',
         shortcuts: 'Shortcuts (Preview Area)',
         shortcutZoomIn: 'Zoom In',
@@ -90,6 +98,13 @@ const T = {
         scrollActionDesc: 'Mouse wheel without Ctrl',
         scrollActionZoom: 'Zoom In/Out',
         scrollActionPan: 'Pan Tool',
+        // Export
+        exportSection: 'Export',
+        exportFormat: 'Export Format',
+        exportFormatDesc: 'PNG / JPEG / WebP / SVG',
+        exportQuality: 'Quality (JPEG / WebP)',
+        exportQualityDesc: 'Higher value = better quality, larger file',
+        exportFormatLabels: { png: 'PNG', jpeg: 'JPEG', webp: 'WebP', svg: 'SVG' },
     },
 } as const;
 
@@ -101,21 +116,37 @@ const THEME_COLORS: Record<AppSettings['theme'], { bg: string; panel: string; ac
 };
 
 const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.5, 2];
+const QUALITY_PRESETS = [0.6, 0.75, 0.85, 0.92, 1.0];
+const EXPORT_FORMATS: ExportFormat[] = ['png', 'jpeg', 'webp', 'svg'];
 
 import { invoke } from '@tauri-apps/api/core';
 
-export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProps) => {
-    const [local, setLocal] = useState<AppSettings>({
-        ...settings,
-    });
+export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: SettingsModalProps) => {
+    // ローカル編集状態（Cancel 時に捨てる）
+    const [local, setLocal] = useState<AppSettings>({ ...settings });
     const t = T[local.language];
 
-    const patch = (p: Partial<AppSettings>) => setLocal(prev => ({ ...prev, ...p }));
+    const patch = useCallback((p: Partial<AppSettings>) => {
+        setLocal(prev => ({ ...prev, ...p }));
+    }, []);
 
-    const handleApply = () => {
+    /** テーマ選択: ローカル変更 + 即時プレビュー */
+    const handleThemeSelect = useCallback((th: AppSettings['theme']) => {
+        if (local.syncThemeWithOS) return;
+        patch({ theme: th });
+        onPreview(th);
+    }, [local.syncThemeWithOS, patch, onPreview]);
+
+    const handleApply = useCallback(() => {
         onUpdate(local);
         onClose();
-    };
+    }, [local, onUpdate, onClose]);
+
+    /** Cancel: 元のテーマに戻す */
+    const handleCancel = useCallback(() => {
+        onPreview(settings.theme);
+        onClose();
+    }, [settings.theme, onPreview, onClose]);
 
     const handleOpenDefaultApps = async () => {
         try { await invoke('open_default_app_settings'); }
@@ -123,7 +154,7 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
     };
 
     const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) handleCancel();
     };
 
     return (
@@ -133,7 +164,7 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                 {/* ── ヘッダー ── */}
                 <div className="settings-modal-header">
                     <span className="settings-modal-title">{t.title}</span>
-                    <button className="settings-modal-close" onClick={onClose}>
+                    <button className="settings-modal-close" onClick={handleCancel}>
                         <X size={14} />
                     </button>
                 </div>
@@ -141,13 +172,11 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                 {/* ── ボディ ── */}
                 <div className="settings-modal-body">
 
-                    {/* 外観セクション */}
+                    {/* 外観 */}
                     <div className="settings-section">
                         <div className="settings-section-heading">
-                            <Monitor size={11} />
-                            <span>{t.appearance}</span>
+                            <Monitor size={11} /><span>{t.appearance}</span>
                         </div>
-
                         <div className="settings-field">
                             <div className="settings-field-label">{t.theme}</div>
                             <div className="settings-field-desc">{t.themeDesc}</div>
@@ -159,24 +188,18 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                         <button
                                             key={th}
                                             className={`settings-theme-card ${isActive ? 'active' : ''} ${local.syncThemeWithOS ? 'disabled' : ''}`}
-                                            onClick={() => !local.syncThemeWithOS && patch({ theme: th })}
+                                            onClick={() => handleThemeSelect(th)}
                                         >
-                                            {/* ミニプレビュー */}
                                             <div className="theme-preview" style={{ background: c.bg }}>
                                                 <div className="theme-preview-panel" style={{ background: c.panel }} />
                                                 <div className="theme-preview-accent" style={{ background: c.accent }} />
                                             </div>
                                             <span className="theme-card-label">{t.themes[th]}</span>
-                                            {isActive && (
-                                                <div className="theme-card-check">
-                                                    <Check size={9} />
-                                                </div>
-                                            )}
+                                            {isActive && <div className="theme-card-check"><Check size={9} /></div>}
                                         </button>
                                     );
                                 })}
                             </div>
-                            {/* OS 同期トグル */}
                             <label className="settings-os-sync-row">
                                 <div className="settings-os-sync-text">
                                     <Laptop size={12} />
@@ -193,13 +216,11 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                         </div>
                     </div>
 
-                    {/* キャンバスセクション */}
+                    {/* キャンバス */}
                     <div className="settings-section">
                         <div className="settings-section-heading">
-                            <ZoomIn size={11} />
-                            <span>{t.canvas}</span>
+                            <ZoomIn size={11} /><span>{t.canvas}</span>
                         </div>
-
                         <div className="settings-field">
                             <div className="settings-field-label">{t.defaultZoom}</div>
                             <div className="settings-field-desc">{t.defaultZoomDesc}</div>
@@ -215,7 +236,6 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                 ))}
                             </div>
                         </div>
-
                         <div className="settings-field" style={{ marginTop: 12 }}>
                             <div className="settings-field-label">{t.scrollAction}</div>
                             <div className="settings-field-desc">{t.scrollActionDesc}</div>
@@ -223,29 +243,86 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                 <button
                                     className={`settings-lang-btn ${(local.scrollAction ?? 'pan') === 'pan' ? 'active' : ''}`}
                                     onClick={() => patch({ scrollAction: 'pan' })}
-                                >
-                                    {t.scrollActionPan}
-                                </button>
+                                >{t.scrollActionPan}</button>
                                 <button
                                     className={`settings-lang-btn ${(local.scrollAction ?? 'pan') === 'zoom' ? 'active' : ''}`}
                                     onClick={() => patch({ scrollAction: 'zoom' })}
-                                >
-                                    {t.scrollActionZoom}
-                                </button>
+                                >{t.scrollActionZoom}</button>
                             </div>
                         </div>
                     </div>
 
-                    {/* 一般セクション */}
+                    {/* ── 書き出し ── */}
                     <div className="settings-section">
                         <div className="settings-section-heading">
-                            <Globe size={11} />
-                            <span>{t.general}</span>
+                            <Download size={11} /><span>{t.exportSection}</span>
                         </div>
 
+                        {/* 形式 */}
+                        <div className="settings-field">
+                            <div className="settings-field-label">{t.exportFormat}</div>
+                            <div className="settings-field-desc">{t.exportFormatDesc}</div>
+                            <div className="settings-export-format-grid">
+                                {EXPORT_FORMATS.map(fmt => (
+                                    <button
+                                        key={fmt}
+                                        className={`settings-export-format-btn ${(local.exportFormat ?? 'png') === fmt ? 'active' : ''}`}
+                                        onClick={() => patch({ exportFormat: fmt })}
+                                    >
+                                        <span className="export-fmt-badge">{fmt.toUpperCase()}</span>
+                                        <span className="export-fmt-desc">{getFormatDesc(fmt, local.language)}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* 品質スライダー (JPEG / WebP のみ有効) */}
+                        {(local.exportFormat === 'jpeg' || local.exportFormat === 'webp') && (
+                            <div className="settings-field" style={{ marginTop: 12 }}>
+                                <div className="settings-field-label">{t.exportQuality}</div>
+                                <div className="settings-field-desc">{t.exportQualityDesc}</div>
+                                <div className="settings-quality-row">
+                                    <div className="settings-zoom-presets">
+                                        {QUALITY_PRESETS.map(q => (
+                                            <button
+                                                key={q}
+                                                className={`settings-zoom-btn ${(local.exportQuality ?? 0.92) === q ? 'active' : ''}`}
+                                                onClick={() => patch({ exportQuality: q })}
+                                            >
+                                                {Math.round(q * 100)}%
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <input
+                                        type="range"
+                                        className="settings-quality-slider"
+                                        min={10} max={100}
+                                        value={Math.round((local.exportQuality ?? 0.92) * 100)}
+                                        onChange={e => patch({ exportQuality: parseInt(e.target.value) / 100 })}
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* SVG 注意書き */}
+                        {local.exportFormat === 'svg' && (
+                            <div className="settings-export-note">
+                                {local.language === 'ja'
+                                    ? 'SVGはキャンバスをラスターとして埋め込みます（ベクター変換ではありません）'
+                                    : 'SVG embeds the canvas as a raster image (not vector conversion)'}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 一般 */}
+                    <div className="settings-section">
+                        <div className="settings-section-heading">
+                            <Globe size={11} /><span>{t.general}</span>
+                        </div>
                         <div className="settings-field">
                             <div className="settings-field-label">{t.language}</div>
-                            <div className="settings-field-desc">{t.languageDesc}</div>                            <div className="settings-lang-toggle">
+                            <div className="settings-field-desc">{t.languageDesc}</div>
+                            <div className="settings-lang-toggle">
                                 {(['ja', 'en'] as const).map(lang => (
                                     <button
                                         key={lang}
@@ -256,7 +333,6 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                     </button>
                                 ))}
                             </div>
-                            {/* OS 同期トグル */}
                             <label className="settings-os-sync-row" style={{ marginTop: 8 }}>
                                 <div className="settings-os-sync-text">
                                     <Laptop size={12} />
@@ -271,8 +347,6 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                 />
                             </label>
                         </div>
-
-                        {/* 履歴件数 */}
                         <div className="settings-field" style={{ marginTop: 12 }}>
                             <div className="settings-field-label">{t.recentFiles}</div>
                             <div className="settings-field-desc">{t.recentFilesDesc}</div>
@@ -288,8 +362,6 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                 ))}
                             </div>
                         </div>
-
-                        {/* 規定のアプリ */}
                         <div className="settings-field" style={{ marginTop: 12 }}>
                             <div className="settings-field-label">{t.defaultApp}</div>
                             <div className="settings-field-desc">{t.defaultAppDesc}</div>
@@ -304,35 +376,29 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                         </div>
                     </div>
 
-                    {/* ヘルプセクション */}
+                    {/* ヘルプ */}
                     <div className="settings-section">
                         <div className="settings-section-heading">
-                            <HelpCircle size={11} />
-                            <span>{t.help}</span>
+                            <HelpCircle size={11} /><span>{t.help}</span>
                         </div>
-
                         <div className="settings-field">
                             <div className="settings-field-label">{t.shortcuts}</div>
                             <div className="shortcut-list">
-                                <div className="shortcut-row">
-                                    <span>{t.shortcutZoomIn}</span>
-                                    <div className="shortcut-keys"><kbd>Ctrl</kbd> <span>+</span> <kbd>+</kbd></div>
-                                </div>
-                                <div className="shortcut-row">
-                                    <span>{t.shortcutZoomOut}</span>
-                                    <div className="shortcut-keys"><kbd>Ctrl</kbd> <span>+</span> <kbd>-</kbd></div>
-                                </div>
-                                <div className="shortcut-row">
-                                    <span>{t.shortcutFit}</span>
-                                    <div className="shortcut-keys"><kbd>Ctrl</kbd> <span>+</span> <kbd>0</kbd></div>
-                                </div>
-                                <div className="shortcut-row">
-                                    <span>{t.shortcutPan}</span>
-                                    <div className="shortcut-keys"><kbd>Space</kbd> <span>+</span> <kbd>Drag</kbd></div>
-                                </div>
+                                {[
+                                    [t.shortcutZoomIn,  'Ctrl', '+'],
+                                    [t.shortcutZoomOut, 'Ctrl', '-'],
+                                    [t.shortcutFit,     'Ctrl', '0'],
+                                    [t.shortcutPan,     'Space','Drag'],
+                                ].map(([label, k1, k2]) => (
+                                    <div key={label} className="shortcut-row">
+                                        <span>{label}</span>
+                                        <div className="shortcut-keys">
+                                            <kbd>{k1}</kbd><span>+</span><kbd>{k2}</kbd>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-
                         <div className="settings-field" style={{ marginTop: 12 }}>
                             <div className="settings-field-label">{t.about}</div>
                             <div className="settings-field-desc">PSD Editor v0.1.0</div>
@@ -342,10 +408,26 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
 
                 {/* ── フッター ── */}
                 <div className="settings-modal-footer">
-                    <button onClick={onClose}>{t.cancel}</button>
+                    <button onClick={handleCancel}>{t.cancel}</button>
                     <button className="btn-primary" onClick={handleApply}>{t.apply}</button>
                 </div>
             </div>
         </div>
     );
 };
+
+function getFormatDesc(fmt: ExportFormat, lang: 'ja' | 'en'): string {
+    const ja: Record<ExportFormat, string> = {
+        png:  '透過対応・可逆',
+        jpeg: '高圧縮・写真向け',
+        webp: '高効率・透過対応',
+        svg:  '埋め込みラスター',
+    };
+    const en: Record<ExportFormat, string> = {
+        png:  'Lossless, alpha',
+        jpeg: 'Lossy, photos',
+        webp: 'Efficient, alpha',
+        svg:  'Embedded raster',
+    };
+    return lang === 'ja' ? ja[fmt] : en[fmt];
+}
