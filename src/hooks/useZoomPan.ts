@@ -15,6 +15,7 @@ export function useZoomPan(
     psdRef: React.MutableRefObject<Psd | null>,
     scrollRef: React.RefObject<HTMLDivElement | null>,
     canvasContainerRef: React.RefObject<HTMLDivElement | null>,
+    scrollAction: 'zoom' | 'pan' = 'pan'
 ) {
     // zoom state は UI 表示（%インジケーター）専用。
     // 実際の transform は canvasContainerRef を直接操作して管理する。
@@ -175,7 +176,10 @@ export function useZoomPan(
             if (performance.now() < nativeInputUntilRef.current) return;
             const deltaY = normalizeDelta(e, e.deltaY);
             const deltaX = normalizeDelta(e, e.deltaX);
-            if (!e.ctrlKey && !e.metaKey) {
+
+            const isZoomIntent = (e.ctrlKey || e.metaKey) || (scrollAction === 'zoom' && !e.shiftKey);
+
+            if (!isZoomIntent) {
                 // ネイティブスクロール（慣性）を止めて、手動でピタッと止める
                 e.preventDefault();
                 if (deltaX !== 0) el.scrollLeft += deltaX;
@@ -211,7 +215,7 @@ export function useZoomPan(
             el.removeEventListener('pointermove', handlePointerMove);
             window.removeEventListener('wheel', handleWheelCapture, { capture: true } as AddEventListenerOptions);
         };
-    }, [scrollRef, zoomAround, clampScroll]);
+    }, [scrollRef, zoomAround, clampScroll, scrollAction]);
 
     useEffect(() => {
         let unlisten: (() => void) | null = null;

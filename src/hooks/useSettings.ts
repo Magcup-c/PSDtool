@@ -7,6 +7,7 @@ export interface AppSettings {
     syncThemeWithOS: boolean;
     syncLangWithOS: boolean;
     maxRecentFiles: number;
+    scrollAction: 'zoom' | 'pan';
 }
 
 // OS のカラースキームからテーマを決定: dark → grey、light → white
@@ -26,6 +27,7 @@ const DEFAULTS: AppSettings = {
     syncThemeWithOS: false,
     syncLangWithOS: false,
     maxRecentFiles: 10,
+    scrollAction: 'pan',
 };
 
 const STORAGE_KEY = 'psd-studio-settings';

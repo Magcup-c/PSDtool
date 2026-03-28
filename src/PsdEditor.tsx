@@ -9,6 +9,7 @@ import './PsdEditor.css';
 import { Image as ImageIcon } from 'lucide-react';
 
 import { attachThumbs, updateLayerByPath, collectSearchResults, throttle } from './utils/psdUtils';
+import { moveLayer } from './utils/psdTreeOps';
 import { Toast } from './components/Toast';
 import { SettingsModal } from './components/SettingsModal';
 import { usePsdHistory } from './hooks/usePsdHistory';
@@ -97,7 +98,7 @@ const PsdEditor = () => {
     const drawDirtyRef = useRef(false);
     const drawRafRef = useRef<number | null>(null);
 
-    const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } = useZoomPan(psdRef, scrollRef, canvasContainerRef);
+    const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } = useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
     const isFirstLoadRef = useRef(true);
     useEffect(() => {
@@ -420,21 +421,10 @@ const PsdEditor = () => {
             if (!target) return;
             const dragKey = state.path.join('-'); const targetKey = target.path.join('-');
             if (targetKey === dragKey || targetKey.startsWith(dragKey + '-')) return;
-            // applyDrop inline
-            const current = psdRef.current; if (!current?.children) return;
-            const cloneTree = (layers: any[]): any[] => layers.map(l => ({ ...l, children: l.children ? cloneTree(l.children) : undefined }));
-            const newChildren = cloneTree(current.children);
-            const [srcLayer] = (state.path.slice(0, -1).length === 0 ? newChildren : (function(c, p){let r=c;for(const i of p)r=r[i].children;return r;})(newChildren, state.path.slice(0, -1))).splice(state.path[state.path.length-1], 1);
-            let dstPath = [...target.path]; const dstParentPath = dstPath.slice(0, -1);
-            if (state.path.slice(0, -1).join('-') === dstParentPath.join('-') && state.path[state.path.length-1] < dstPath[dstPath.length-1]) dstPath[dstPath.length-1]--;
-            if (target.position === 'inside') {
-                const dstGroup = dstPath.length === 0 ? { children: newChildren } : (function(c, p){let r=c;for(const i of p)r=r[i].children;return r;})(newChildren, dstPath.slice(0, -1))[dstPath[dstPath.length-1]] as any;
-                if (!dstGroup.children) dstGroup.children = []; dstGroup.children.push(srcLayer);
-            } else {
-                const dstArr = dstParentPath.length === 0 ? newChildren : (function(c, p){let r=c;for(const i of p)r=r[i].children;return r;})(newChildren, dstParentPath);
-                let idx = dstPath[dstPath.length-1]; if (target.position === 'after') idx++; dstArr.splice(idx, 0, srcLayer);
-            }
-            commitPsd({ ...current, children: newChildren });
+
+            // 外部ユーティリティを使用してレイヤーを移動
+            const nextPsd = moveLayer(psdRef.current, state.path, target.path, target.position);
+            if (nextPsd) commitPsd(nextPsd);
         };
         window.addEventListener('mousemove', onMouseMove); window.addEventListener('mouseup', onMouseUp);
     }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd]);

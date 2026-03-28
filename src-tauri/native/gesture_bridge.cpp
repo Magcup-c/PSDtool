@@ -60,19 +60,20 @@ static LRESULT CALLBACK GestureSubclassProc(HWND hwnd, UINT msg, WPARAM wparam, 
         UINT32 pointerId = GET_POINTERID_WPARAM(wparam);
         POINTER_INFO pi;
         if (GetPointerInfo(pointerId, &pi)) {
-            // PT_TOUCH(2), PT_PEN(3), PT_MOUSE(4), PT_TOUCHPAD(5)
-            // デバッグ用に一旦 PT_TOUCH(2) と PT_TOUCHPAD(5) を確実に拾う
-            if (pi.pointerType == 5 || pi.pointerType == 2) {
+            // タッチまたはタッチパッド入力を対象とする
+            if (pi.pointerType == PT_TOUCH || pi.pointerType == PT_TOUCHPAD) {
                 POINT pt = pi.ptPixelLocation;
                 ScreenToClient(hwnd, &pt);
 
-                if (msg == WM_POINTERUP) {
-                    if (state) state->points.erase(pointerId);
+                if (!state) return DefSubclassProc(hwnd, msg, wparam, lparam);
+
+                if (msg == WM_POINTERUP || msg == WM_POINTERCAPTURECHANGED) {
+                    state->points.erase(pointerId);
                 } else {
-                    if (state) state->points[pointerId] = pt;
+                    state->points[pointerId] = pt;
                 }
 
-                if (state && state->points.size() == 2) {
+                if (state->points.size() == 2) {
                     auto it = state->points.begin();
                     POINT p1 = it->second;
                     POINT p2 = (++it)->second;
@@ -96,16 +97,20 @@ static LRESULT CALLBACK GestureSubclassProc(HWND hwnd, UINT msg, WPARAM wparam, 
                     state->last_distance = dist;
                     state->last_center = center;
                     
-                    // 2本指操作中は、Windowsにこれ以上処理させない
-                    return 0; 
+                    return 0; // 処理済み
                 } else {
-                    if (state) state->last_distance = 0.0;
+                    // 2本指でない場合は状態をリセット
+                    state->last_distance = 0.0;
+                    state->last_center = {0, 0};
                 }
             }
         }
         break;
     }
-    // ... WM_NCDESTROY ...
+    case WM_NCDESTROY: {
+        RemoveWindowSubclass(hwnd, GestureSubclassProc, uIdSubclass);
+        break;
+    }
     }
     return DefSubclassProc(hwnd, msg, wparam, lparam);
 }

@@ -45,6 +45,10 @@ const T = {
         shortcutFit: '全画面表示にする',
         shortcutPan: 'パン (移動)',
         about: 'このアプリについて',
+        scrollAction: 'スクロール動作',
+        scrollActionDesc: 'Ctrl無しのホイール（2本指）操作',
+        scrollActionZoom: '拡大・縮小',
+        scrollActionPan: '上下移動 (Pan)',
     },
     en: {
         title: 'Settings',
@@ -82,6 +86,10 @@ const T = {
         shortcutFit: 'Fit to View',
         shortcutPan: 'Pan Tool',
         about: 'About',
+        scrollAction: 'Scroll Action',
+        scrollActionDesc: 'Mouse wheel without Ctrl',
+        scrollActionZoom: 'Zoom In/Out',
+        scrollActionPan: 'Pan Tool',
     },
 } as const;
 
@@ -205,6 +213,25 @@ export const SettingsModal = ({ settings, onUpdate, onClose }: SettingsModalProp
                                         {Math.round(z * 100)}%
                                     </button>
                                 ))}
+                            </div>
+                        </div>
+
+                        <div className="settings-field" style={{ marginTop: 12 }}>
+                            <div className="settings-field-label">{t.scrollAction}</div>
+                            <div className="settings-field-desc">{t.scrollActionDesc}</div>
+                            <div className="settings-lang-toggle" style={{ marginTop: 8, justifyContent: 'flex-start' }}>
+                                <button
+                                    className={`settings-lang-btn ${(local.scrollAction ?? 'pan') === 'pan' ? 'active' : ''}`}
+                                    onClick={() => patch({ scrollAction: 'pan' })}
+                                >
+                                    {t.scrollActionPan}
+                                </button>
+                                <button
+                                    className={`settings-lang-btn ${(local.scrollAction ?? 'pan') === 'zoom' ? 'active' : ''}`}
+                                    onClick={() => patch({ scrollAction: 'zoom' })}
+                                >
+                                    {t.scrollActionZoom}
+                                </button>
                             </div>
                         </div>
                     </div>
