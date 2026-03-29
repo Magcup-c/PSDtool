@@ -17,6 +17,8 @@ export interface LayerFavorite {
     radioEnabled?: boolean;
     lockedEnabled?: boolean;
     flipEnabled?: boolean;
+    // PNG プレビュー（base64 data URL、オプション）
+    previewDataUrl?: string;
 }
 
 type FavoriteStore = Record<string, LayerFavorite[]>;
@@ -28,9 +30,7 @@ function loadStore(): FavoriteStore {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
         return raw ? JSON.parse(raw) : {};
-    } catch {
-        return {};
-    }
+    } catch { return {}; }
 }
 
 function saveStore(store: FavoriteStore) {
@@ -45,6 +45,49 @@ function makeId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+// ── JSON export / import helpers ────────────────────────────────────────────
+
+/** お気に入りリストを JSON ファイルとしてダウンロードさせる */
+export function exportFavoritesToJson(favorites: LayerFavorite[], filename?: string): void {
+    const payload = JSON.stringify(favorites, null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename ?? `favorites_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+/** JSON ファイルを読み込んで LayerFavorite[] を返す */
+export function importFavoritesFromJson(file: File): Promise<LayerFavorite[]> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const parsed = JSON.parse(e.target?.result as string);
+                if (!Array.isArray(parsed)) throw new Error('Invalid format: expected an array');
+                // 最低限のフィールド検証
+                const valid = parsed.filter(
+                    (item): item is LayerFavorite =>
+                        typeof item === 'object' &&
+                        typeof item.name === 'string' &&
+                        Array.isArray(item.state),
+                );
+                if (valid.length === 0) throw new Error('No valid favorites found in file');
+                // インポート時は id を再生成（衝突回避）
+                resolve(valid.map(f => ({ ...f, id: makeId() })));
+            } catch (err) {
+                reject(err);
+            }
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+    });
+}
+
+// ── hook ────────────────────────────────────────────────────────────────────
 
 export function useLayerFavorites(fileKey: string | null) {
     const key = getKey(fileKey);
@@ -62,15 +105,10 @@ export function useLayerFavorites(fileKey: string | null) {
         name: string,
         state: LayerStateNode[],
         closedKeys: string[],
-        extra?: Pick<LayerFavorite, 'zoom' | 'flipX' | 'flipY' | 'radioEnabled' | 'lockedEnabled' | 'flipEnabled'>,
+        extra?: Pick<LayerFavorite, 'zoom' | 'flipX' | 'flipY' | 'radioEnabled' | 'lockedEnabled' | 'flipEnabled' | 'previewDataUrl'>,
     ) => {
         const entry: LayerFavorite = {
-            id: makeId(),
-            name,
-            createdAt: Date.now(),
-            state,
-            closedKeys,
-            ...extra,
+            id: makeId(), name, createdAt: Date.now(), state, closedKeys, ...extra,
         };
         setFavorites(prev => {
             const next = [entry, ...prev].slice(0, MAX_FAVORITES);
@@ -83,7 +121,7 @@ export function useLayerFavorites(fileKey: string | null) {
 
     const updateFavoriteName = useCallback((id: string, name: string) => {
         setFavorites(prev => {
-            const next = prev.map(f => (f.id === id ? { ...f, name } : f));
+            const next = prev.map(f => f.id === id ? { ...f, name } : f);
             const store = loadStore();
             store[key] = next;
             saveStore(store);
@@ -98,9 +136,7 @@ export function useLayerFavorites(fileKey: string | null) {
             const next = [...prev];
             const target = dir === 'up' ? idx - 1 : idx + 1;
             if (target < 0 || target >= next.length) return prev;
-            const temp = next[idx];
-            next[idx] = next[target];
-            next[target] = temp;
+            [next[idx], next[target]] = [next[target], next[idx]];
             const store = loadStore();
             store[key] = next;
             saveStore(store);
@@ -134,5 +170,26 @@ export function useLayerFavorites(fileKey: string | null) {
         });
     }, [key]);
 
-    return { favorites, saveFavorite, deleteFavorite, updateFavoriteName, moveFavorite, moveFavoriteTo };
+    /** JSON ファイルからインポートして既存リストにマージ（重複 id は上書きしない） */
+    const importFavorites = useCallback((incoming: LayerFavorite[], mode: 'merge' | 'replace' = 'merge') => {
+        setFavorites(prev => {
+            const next = mode === 'replace'
+                ? [...incoming].slice(0, MAX_FAVORITES)
+                : [...incoming, ...prev].slice(0, MAX_FAVORITES);
+            const store = loadStore();
+            store[key] = next;
+            saveStore(store);
+            return next;
+        });
+    }, [key]);
+
+    return {
+        favorites,
+        saveFavorite,
+        deleteFavorite,
+        updateFavoriteName,
+        moveFavorite,
+        moveFavoriteTo,
+        importFavorites,
+    };
 }

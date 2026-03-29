@@ -7,7 +7,7 @@
  *   3. Cancel 時にプレビューをロールバック
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { X, Monitor, ZoomIn, Globe, Check, Laptop, HelpCircle, Download } from 'lucide-react';
 import { AppSettings, ExportFormat } from '../hooks/useSettings';
 
@@ -61,6 +61,7 @@ const T = {
         exportFormatDesc: 'PNG / JPEG / WebP / SVG',
         exportQuality: '品質 (JPEG / WebP)',
         exportQualityDesc: '数値が大きいほど高品質・大容量',
+        exportQualityCustom: 'カスタム',
         exportFormatLabels: { png: 'PNG', jpeg: 'JPEG', webp: 'WebP', svg: 'SVG' },
     },
     en: {
@@ -104,6 +105,7 @@ const T = {
         exportFormatDesc: 'PNG / JPEG / WebP / SVG',
         exportQuality: 'Quality (JPEG / WebP)',
         exportQualityDesc: 'Higher value = better quality, larger file',
+        exportQualityCustom: 'Custom',
         exportFormatLabels: { png: 'PNG', jpeg: 'JPEG', webp: 'WebP', svg: 'SVG' },
     },
 } as const;
@@ -116,7 +118,7 @@ const THEME_COLORS: Record<AppSettings['theme'], { bg: string; panel: string; ac
 };
 
 const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.5, 2];
-const QUALITY_PRESETS = [0.6, 0.75, 0.85, 0.92, 1.0];
+const QUALITY_PRESETS = [0.6, 0.75, 0.85, 0.95, 1.0];
 const EXPORT_FORMATS: ExportFormat[] = ['png', 'jpeg', 'webp', 'svg'];
 
 import { invoke } from '@tauri-apps/api/core';
@@ -124,6 +126,7 @@ import { invoke } from '@tauri-apps/api/core';
 export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: SettingsModalProps) => {
     // ローカル編集状態（Cancel 時に捨てる）
     const [local, setLocal] = useState<AppSettings>({ ...settings });
+    const [qualityCustom, setQualityCustom] = useState(() => !isPresetQuality(settings.exportQuality ?? 0.92));
     const t = T[local.language];
 
     const patch = useCallback((p: Partial<AppSettings>) => {
@@ -156,6 +159,14 @@ export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: Settin
     const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
         if (e.target === e.currentTarget) handleCancel();
     };
+
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') handleCancel();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [handleCancel]);
 
     return (
         <div className="settings-overlay" onClick={handleOverlayClick}>
@@ -286,20 +297,44 @@ export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: Settin
                                         {QUALITY_PRESETS.map(q => (
                                             <button
                                                 key={q}
-                                                className={`settings-zoom-btn ${(local.exportQuality ?? 0.92) === q ? 'active' : ''}`}
-                                                onClick={() => patch({ exportQuality: q })}
+                                                className={`settings-zoom-btn ${!qualityCustom && isSameQuality(local.exportQuality ?? 0.92, q) ? 'active' : ''}`}
+                                                onClick={() => {
+                                                    setQualityCustom(false);
+                                                    patch({ exportQuality: q });
+                                                }}
                                             >
                                                 {Math.round(q * 100)}%
                                             </button>
                                         ))}
+                                        <button
+                                            className={`settings-zoom-btn ${qualityCustom ? 'active' : ''}`}
+                                            onClick={() => {
+                                                setQualityCustom(true);
+                                                if (local.exportQuality == null) patch({ exportQuality: 0.92 });
+                                            }}
+                                        >
+                                            {t.exportQualityCustom}
+                                        </button>
                                     </div>
-                                    <input
-                                        type="range"
-                                        className="settings-quality-slider"
-                                        min={10} max={100}
-                                        value={Math.round((local.exportQuality ?? 0.92) * 100)}
-                                        onChange={e => patch({ exportQuality: parseInt(e.target.value) / 100 })}
-                                    />
+                                    {qualityCustom && (
+                                        <div className="settings-quality-slider-row">
+                                            <input
+                                                type="range"
+                                                className="settings-quality-slider"
+                                                min={10} max={100}
+                                                value={Math.round((local.exportQuality ?? 0.92) * 100)}
+                                                onChange={e => {
+                                                    setQualityCustom(true);
+                                                    const next = clampQuality(parseInt(e.target.value, 10) / 100);
+                                                    patch({ exportQuality: next });
+                                                }}
+                                            />
+                                            <div className="settings-quality-input" aria-live="polite">
+                                                {Math.round((local.exportQuality ?? 0.92) * 100)}
+                                            </div>
+                                            <div className="settings-quality-value">%</div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -436,4 +471,17 @@ function getFormatDesc(fmt: ExportFormat, lang: 'ja' | 'en'): string {
         svg:  'Embedded raster',
     };
     return lang === 'ja' ? ja[fmt] : en[fmt];
+}
+
+function isSameQuality(a: number, b: number): boolean {
+    return Math.abs(a - b) < 0.0001;
+}
+
+function isPresetQuality(q: number): boolean {
+    return QUALITY_PRESETS.some(p => isSameQuality(q, p));
+}
+
+function clampQuality(q: number): number {
+    if (Number.isNaN(q)) return 0.92;
+    return Math.min(1, Math.max(0.1, q));
 }

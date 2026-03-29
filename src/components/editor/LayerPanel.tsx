@@ -1,12 +1,13 @@
-import { useMemo, useLayoutEffect, useState, useRef } from 'react';
+import { useMemo, useLayoutEffect, useState, useRef, useCallback } from 'react';
 import {
     Plus, FolderPlus, ChevronsUpDown, ChevronsDownUp, Star, Search, X,
     Asterisk, Pin, Replace, GripVertical, Pencil, Trash2,
+    Upload, Download, Image as ImageIcon,
 } from 'lucide-react';
 import { SearchResultRow } from '../SearchResultRow';
 import { VirtualLayerList, flattenLayers } from '../../VirtualLayerList';
 import { DropTargetInfo, SearchResult } from '../../types';
-import { LayerFavorite } from '../../hooks/useLayerFavorites';
+import { LayerFavorite, exportFavoritesToJson, importFavoritesFromJson } from '../../hooks/useLayerFavorites';
 import { Psd } from 'ag-psd';
 
 interface LayerPanelProps {
@@ -49,6 +50,11 @@ interface LayerPanelProps {
     formatFavoriteTime: (ts: number, lang: 'ja' | 'en') => string;
     lang: 'ja' | 'en';
     L: any;
+    // 追加
+    importFavorites: (incoming: LayerFavorite[], mode: 'merge' | 'replace') => void;
+    onExportFavoriteImage: (fav: LayerFavorite) => void;
+    onExportAllFavoriteImages: () => void;
+    currentFilePath: string | null;
 }
 
 export const LayerPanel: React.FC<LayerPanelProps> = ({
@@ -59,17 +65,20 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
     handleExpandAll, handleCollapseAll, handleAddLayer, handleAddGroup,
     favorites, openCreateFavorite, handleApplyFavorite, openRenameFavorite, deleteFavorite,
     handleFavoriteDragStart, favoriteDrop, favoriteListRef, layerScrollRef,
-    formatFavoriteTime, lang, L
+    formatFavoriteTime, lang, L,
+    importFavorites, onExportFavoriteImage, onExportAllFavoriteImages, currentFilePath,
 }) => {
     const layerResizeRef = useRef<HTMLDivElement>(null);
     const [layerListHeight, setLayerListHeight] = useState(400);
+    const importInputRef = useRef<HTMLInputElement>(null);
+    const dropZoneRef = useRef<HTMLDivElement>(null);
+    const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+    const [isDragOver, setIsDragOver] = useState(false);
 
     useLayoutEffect(() => {
         const el = layerResizeRef.current;
         if (!el) return;
-        const ro = new ResizeObserver(() => {
-            setLayerListHeight(Math.max(0, el.clientHeight));
-        });
+        const ro = new ResizeObserver(() => setLayerListHeight(Math.max(0, el.clientHeight)));
         ro.observe(el);
         setLayerListHeight(Math.max(0, el.clientHeight));
         return () => ro.disconnect();
@@ -80,27 +89,103 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
         return flattenLayers(psd.children, closedKeys, flipEnabled, hasFlipSuffix);
     }, [psd, closedKeys, flipEnabled, hasFlipSuffix]);
 
+    // ── JSON export ──────────────────────────────────────────────────────────
+    const handleExportJson = useCallback(() => {
+        if (favorites.length === 0) return;
+        const stem = currentFilePath
+            ? currentFilePath.replace(/\\/g, '/').split('/').pop()?.replace(/\.psd$/i, '') ?? 'favorites'
+            : 'favorites';
+        exportFavoritesToJson(favorites, `${stem}_favorites.json`);
+    }, [favorites, currentFilePath]);
+
+    // ── JSON import (ファイル選択) ────────────────────────────────────────────
+    const handleImportClick = useCallback(() => {
+        importInputRef.current?.click();
+    }, []);
+
+    const handleImportFile = useCallback(async (file: File) => {
+        try {
+            const incoming = await importFavoritesFromJson(file);
+            importFavorites(incoming, importMode);
+        } catch (err) {
+            alert(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }, [importFavorites, importMode]);
+
+    const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) handleImportFile(file);
+        e.target.value = '';
+    }, [handleImportFile]);
+
+    // ── JSON import (ドラッグ&ドロップ) ──────────────────────────────────────
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        const hasJson = Array.from(e.dataTransfer.items).some(
+            item => item.kind === 'file' && (item.type === 'application/json' || item.type === '')
+        );
+        if (!hasJson) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+    }, []);
+
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        if (!dropZoneRef.current?.contains(e.relatedTarget as Node)) {
+            setIsDragOver(false);
+        }
+    }, []);
+
+    const handleDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+        const file = Array.from(e.dataTransfer.files).find(f =>
+            f.name.endsWith('.json') || f.type === 'application/json'
+        );
+        if (file) handleImportFile(file);
+    }, [handleImportFile]);
+
+    const favToolTip = lang === 'ja'
+        ? { exportJson: 'JSONで書き出し', importJson: 'JSONから読み込み', exportImg: 'すべてPNGで書き出し' }
+        : { exportJson: 'Export as JSON', importJson: 'Import from JSON', exportImg: 'Export all as PNG' };
+
     return (
-        <div className="layer-panel" style={{ width, minWidth: width }}>
+        <div
+            className="layer-panel"
+            style={{ width, minWidth: width }}
+            ref={dropZoneRef}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+        >
+            {/* JSON ファイル選択用 hidden input */}
+            <input
+                ref={importInputRef}
+                type="file"
+                accept=".json,application/json"
+                style={{ display: 'none' }}
+                onChange={handleInputChange}
+            />
+
+            {/* ドラッグ&ドロップ オーバーレイ */}
+            {isDragOver && (
+                <div className="favorites-drop-overlay">
+                    <div className="favorites-drop-message">
+                        <Upload size={24} />
+                        <span>{lang === 'ja' ? 'JSONをドロップして読み込み' : 'Drop JSON to import'}</span>
+                    </div>
+                </div>
+            )}
+
             <div className="panel-header">
                 <h2>{L.layers}</h2>
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                     {psd && !searchResults && (
                         <>
-                            <button 
-                                className="toggle-expand" 
-                                onClick={handleAddLayer} 
-                                title={L.addLayer}
-                                aria-label="Add new layer"
-                            >
+                            <button className="toggle-expand" onClick={handleAddLayer} title={L.addLayer} aria-label="Add new layer">
                                 <Plus size={14} />
                             </button>
-                            <button 
-                                className="toggle-expand" 
-                                onClick={handleAddGroup} 
-                                title={L.addGroup}
-                                aria-label="Add new group"
-                            >
+                            <button className="toggle-expand" onClick={handleAddGroup} title={L.addGroup} aria-label="Add new group">
                                 <FolderPlus size={14} />
                             </button>
                             <div style={{ width: 1, height: 14, background: 'var(--line-mid)', margin: '0 2px' }} />
@@ -108,20 +193,10 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                     )}
                     {!searchResults && (
                         <>
-                            <button 
-                                className="toggle-expand" 
-                                onClick={handleExpandAll} 
-                                title={L.expandAll}
-                                aria-label="Expand all groups"
-                            >
+                            <button className="toggle-expand" onClick={handleExpandAll} title={L.expandAll} aria-label="Expand all groups">
                                 <ChevronsUpDown size={14} />
                             </button>
-                            <button 
-                                className="toggle-expand" 
-                                onClick={handleCollapseAll} 
-                                title={L.collapseAll}
-                                aria-label="Collapse all groups"
-                            >
+                            <button className="toggle-expand" onClick={handleCollapseAll} title={L.collapseAll} aria-label="Collapse all groups">
                                 <ChevronsDownUp size={14} />
                             </button>
                         </>
@@ -131,30 +206,75 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
 
             {psd && (
                 <div className="favorites-panel">
+                    {/* ── お気に入りヘッダー ── */}
                     <div className="favorites-header">
                         <span className="favorites-title">{L.favorites}</span>
-                        <button 
-                            className="favorite-add" 
-                            onClick={openCreateFavorite} 
-                            title={L.saveState}
-                            aria-label="Save current visibility state as favorite"
-                        >
-                            <Star size={12} />
-                        </button>
+                        <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                            {/* 全件PNG書き出し */}
+                            {favorites.length > 0 && (
+                                <button
+                                    className="favorite-add"
+                                    onClick={onExportAllFavoriteImages}
+                                    title={favToolTip.exportImg}
+                                    aria-label="Export all favorites as PNG"
+                                >
+                                    <ImageIcon size={12} />
+                                </button>
+                            )}
+                            {/* JSON 書き出し */}
+                            {favorites.length > 0 && (
+                                <button
+                                    className="favorite-add"
+                                    onClick={handleExportJson}
+                                    title={favToolTip.exportJson}
+                                    aria-label="Export favorites as JSON"
+                                >
+                                    <Download size={12} />
+                                </button>
+                            )}
+                            {/* JSON 読み込み */}
+                            <button
+                                className="favorite-add"
+                                onClick={handleImportClick}
+                                title={favToolTip.importJson}
+                                aria-label="Import favorites from JSON"
+                            >
+                                <Upload size={12} />
+                            </button>
+                            {/* merge / replace トグル — import ボタンの横に小さく表示 */}
+                            <button
+                                className={`favorite-add ${importMode === 'replace' ? 'btn-active' : ''}`}
+                                onClick={() => setImportMode(m => m === 'merge' ? 'replace' : 'merge')}
+                                title={lang === 'ja'
+                                    ? `読み込みモード: ${importMode === 'merge' ? 'マージ' : '上書き'}（クリックで切替）`
+                                    : `Import mode: ${importMode} (click to toggle)`}
+                                style={{ fontSize: 9, fontFamily: 'var(--font-mono, monospace)', minWidth: 28, padding: '2px 4px' }}
+                                aria-label="Toggle import mode"
+                            >
+                                {importMode === 'merge' ? '+M' : '=R'}
+                            </button>
+                            {/* 新規保存 */}
+                            <button
+                                className="favorite-add"
+                                onClick={openCreateFavorite}
+                                title={L.saveState}
+                                aria-label="Save current visibility state as favorite"
+                            >
+                                <Star size={12} />
+                            </button>
+                        </div>
                     </div>
+
                     {favorites.length === 0 ? (
                         <div className="favorites-empty">{L.noFavorites}</div>
                     ) : (
                         <ul className="favorites-list" ref={favoriteListRef}>
                             {favorites.map((fav) => {
-                                const isDrop = favoriteDrop?.id === fav.id;
+                                const isDrop       = favoriteDrop?.id === fav.id;
                                 const isDropBefore = isDrop && favoriteDrop?.position === 'before';
-                                const isDropAfter = isDrop && favoriteDrop?.position === 'after';
+                                const isDropAfter  = isDrop && favoriteDrop?.position === 'after';
                                 return (
-                                    <li
-                                        key={fav.id}
-                                        className={`favorite-row ${isDrop ? 'drop-target' : ''}`}
-                                    >
+                                    <li key={fav.id} className={`favorite-row ${isDrop ? 'drop-target' : ''}`}>
                                         {isDropBefore && <div className="favorite-drop-line" />}
                                         <button
                                             className="favorite-item"
@@ -172,11 +292,35 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                                             >
                                                 <GripVertical size={12} />
                                             </span>
-                                            <Star size={11} className="favorite-icon" />
-                                            <span className="favorite-name" data-full={fav.name} title={fav.name}>{fav.name}</span>
+
+                                            {/* PNG プレビューサムネイル（あれば表示） */}
+                                            {fav.previewDataUrl ? (
+                                                <img
+                                                    src={fav.previewDataUrl}
+                                                    alt=""
+                                                    className="favorite-preview-thumb"
+                                                    aria-hidden="true"
+                                                />
+                                            ) : (
+                                                <Star size={11} className="favorite-icon" />
+                                            )}
+
+                                            <span className="favorite-name" data-full={fav.name} title={fav.name}>
+                                                {fav.name}
+                                            </span>
                                             <span className="favorite-time">{formatFavoriteTime(fav.createdAt, lang)}</span>
                                         </button>
+
                                         <div className="favorite-actions">
+                                            {/* 1件PNG書き出し */}
+                                            <button
+                                                className="favorite-action"
+                                                onClick={() => onExportFavoriteImage(fav)}
+                                                title={lang === 'ja' ? 'PNGで書き出し' : 'Export as PNG'}
+                                                aria-label={`Export ${fav.name} as PNG`}
+                                            >
+                                                <ImageIcon size={11} />
+                                            </button>
                                             <button
                                                 className="favorite-action"
                                                 onClick={() => openRenameFavorite(fav)}
@@ -207,19 +351,19 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                 <div className="layer-search-bar">
                     <Search size={12} className="layer-search-icon" />
                     <input
-                        ref={searchInputRef} 
-                        type="text" 
+                        ref={searchInputRef}
+                        type="text"
                         className="layer-search-input"
-                        placeholder={L.searchPlaceholder} 
+                        placeholder={L.searchPlaceholder}
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
                         aria-label="Search layers by name"
                     />
                     {searchQuery && (
-                        <button 
-                            className="layer-search-clear" 
-                            onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }} 
+                        <button
+                            className="layer-search-clear"
+                            onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }}
                             title="Clear search"
                             aria-label="Clear search query"
                         >
@@ -231,32 +375,14 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
 
             {!searchResults && (
                 <div className="layer-mode-bar">
-                    <button 
-                        className={`mode-toggle ${radioEnabled ? 'active' : ''}`} 
-                        onClick={() => setRadioEnabled(v => !v)} 
-                        title="Radio group mode"
-                        aria-label="Toggle radio group mode"
-                    >
-                        <Asterisk size={13} />
-                        <span>{L.radio}</span>
+                    <button className={`mode-toggle ${radioEnabled ? 'active' : ''}`} onClick={() => setRadioEnabled(v => !v)} title="Radio group mode" aria-label="Toggle radio group mode">
+                        <Asterisk size={13} /><span>{L.radio}</span>
                     </button>
-                    <button 
-                        className={`mode-toggle ${lockedEnabled ? 'active' : ''}`} 
-                        onClick={() => setLockedEnabled(v => !v)} 
-                        title="Locked visibility mode"
-                        aria-label="Toggle locked visibility mode"
-                    >
-                        <Pin size={13} />
-                        <span>{L.fixed}</span>
+                    <button className={`mode-toggle ${lockedEnabled ? 'active' : ''}`} onClick={() => setLockedEnabled(v => !v)} title="Locked visibility mode" aria-label="Toggle locked visibility mode">
+                        <Pin size={13} /><span>{L.fixed}</span>
                     </button>
-                    <button 
-                        className={`mode-toggle ${flipEnabled ? 'active' : ''}`} 
-                        onClick={() => setFlipEnabled(v => !v)} 
-                        title="Flip variant mode"
-                        aria-label="Toggle flip variant mode"
-                    >
-                        <Replace size={13} />
-                        <span>{L.flip}</span>
+                    <button className={`mode-toggle ${flipEnabled ? 'active' : ''}`} onClick={() => setFlipEnabled(v => !v)} title="Flip variant mode" aria-label="Toggle flip variant mode">
+                        <Replace size={13} /><span>{L.flip}</span>
                     </button>
                 </div>
             )}

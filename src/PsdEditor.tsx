@@ -1,12 +1,12 @@
 /**
- * src/PsdEditor.tsx  (updated)
+ * src/PsdEditor.tsx
  *
- * 変更点:
- *   1. useTabManager でマルチタブ管理
- *   2. TabBar コンポーネントを EditorHeader 下に追加
- *   3. タブ切り替え時にスクロール・ズーム・フリップ状態を復元
- *   4. 書き出し形式（JPEG/WebP/SVG）に対応した handleExport
- *   5. SettingsModal に onPreview（テーマ即時プレビュー）を渡す
+ * 変更点（お気に入り強化）:
+ *   1. saveFavorite 時にキャンバスから 64px プレビュー dataUrl を生成
+ *   2. handleExportFavoriteImage — 1件ずつ PNG 書き出し
+ *   3. handleExportAllFavoriteImages — 全件一括 PNG 書き出し
+ *   4. importFavorites をフックから取得して LayerPanel に渡す
+ *   5. LayerPanel に新 props 4つを接続
  */
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
@@ -37,7 +37,7 @@ import { LayerPanel } from './components/editor/LayerPanel';
 import { PreviewArea } from './components/editor/PreviewArea';
 import { FavoriteModal } from './components/editor/FavoriteModal';
 
-// ─── layer state helpers ────────────────────────────────────────────────────
+// ─── layer state helpers ─────────────────────────────────────────────────────
 
 function captureLayerState(layers: any[]): any[] {
     return layers.map(layer => ({
@@ -65,19 +65,9 @@ function formatFavoriteTime(ts: number, lang: 'ja' | 'en') {
     } catch { return ''; }
 }
 
-// ─── Canvas export helpers ──────────────────────────────────────────────────
+// ─── Canvas export helpers ────────────────────────────────────────────────────
 
 type ExportFormat = 'png' | 'jpeg' | 'webp' | 'svg';
-
-function canvasToSvgDataUrl(canvas: HTMLCanvasElement): string {
-    const dataUrl = canvas.toDataURL('image/png');
-    const w = canvas.width;
-    const h = canvas.height;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
-        `<image href="${dataUrl}" width="${w}" height="${h}"/>` +
-        `</svg>`;
-    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-}
 
 async function exportCanvas(
     canvas: HTMLCanvasElement,
@@ -85,7 +75,8 @@ async function exportCanvas(
     quality: number,
 ): Promise<Uint8Array> {
     if (format === 'svg') {
-        const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}">` +
+        const svgStr =
+            `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}">` +
             `<image href="${canvas.toDataURL('image/png')}" width="${canvas.width}" height="${canvas.height}"/>` +
             `</svg>`;
         return new TextEncoder().encode(svgStr);
@@ -94,7 +85,7 @@ async function exportCanvas(
         png:  'image/png',
         jpeg: 'image/jpeg',
         webp: 'image/webp',
-        svg:  'image/png', // unreachable
+        svg:  'image/png',
     };
     return new Promise<Uint8Array>((resolve, reject) => {
         canvas.toBlob(blob => {
@@ -104,7 +95,25 @@ async function exportCanvas(
     });
 }
 
-// ─── Main Component ──────────────────────────────────────────────────────────
+/** オフスクリーンキャンバスに psd の visible レイヤーを描画して PNG bytes を返す */
+async function renderPsdToBytes(psd: any): Promise<Uint8Array> {
+    const oc  = new OffscreenCanvas(psd.width, psd.height);
+    const ctx = oc.getContext('2d')!;
+
+    const drawLayers = (layers: any[]) => {
+        for (const layer of layers) {
+            if (layer.hidden) continue;
+            if (layer.children) drawLayers(layer.children);
+            else if (layer._bitmap) ctx.drawImage(layer._bitmap, layer.left || 0, layer.top || 0);
+        }
+    };
+    if (psd.children) drawLayers(psd.children);
+
+    const blob = await oc.convertToBlob({ type: 'image/png' });
+    return new Uint8Array(await blob.arrayBuffer());
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 const PsdEditor = () => {
     const {
@@ -120,28 +129,31 @@ const PsdEditor = () => {
     // ── タブ管理 ──
     const tabManager = useTabManager();
     const { tabs, activeId, updateTab } = tabManager;
-    const tabsRef = useRef(tabs);
-    tabsRef.current = tabs;
+    const tabsRef    = useRef(tabs);
+    tabsRef.current  = tabs;
     const activeIdRef = useRef(activeId);
     activeIdRef.current = activeId;
 
-    /** 同一タブに複数読み込みが走ったとき古い結果を捨てる（世代番号） */
     const loadGenByTabRef = useRef<Map<string, number>>(new Map());
-    /** 並行読み込み数 — いずれかが終わるまでプレビューはローディング表示 */
-    const loadCountRef = useRef(0);
+    const loadCountRef    = useRef(0);
 
     const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
-    const { favorites, saveFavorite, deleteFavorite, updateFavoriteName, moveFavoriteTo } = useLayerFavorites(currentFilePath);
-    const [favoriteDialog, setFavoriteDialog] = useState<{ mode: 'create' | 'rename'; id?: string; value: string } | null>(null);
-    const favoriteInputRef = useRef<HTMLInputElement>(null);
-    const favoriteListRef  = useRef<HTMLUListElement>(null);
-    const favoriteRectsRef = useRef<{ id: string; rect: DOMRect }[]>([]);
+    const {
+        favorites, saveFavorite, deleteFavorite, updateFavoriteName, moveFavoriteTo, importFavorites,
+    } = useLayerFavorites(currentFilePath);
+
+    const [favoriteDialog, setFavoriteDialog] = useState<{
+        mode: 'create' | 'rename'; id?: string; value: string
+    } | null>(null);
+    const favoriteInputRef  = useRef<HTMLInputElement>(null);
+    const favoriteListRef   = useRef<HTMLUListElement>(null);
+    const favoriteRectsRef  = useRef<{ id: string; rect: DOMRect }[]>([]);
     const [favoriteDrop, setFavoriteDrop] = useState<{ id: string; position: 'before' | 'after' } | null>(null);
 
     const [isLoading, setIsLoading]   = useState(false);
     const [isDragging, setIsDragging] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(240);
-    const isResizingRef = useRef(false);
+    const isResizingRef  = useRef(false);
     const [flipX, setFlipX] = useState(false);
     const [flipY, setFlipY] = useState(false);
     const [radioEnabled, setRadioEnabled]   = useState(true);
@@ -163,20 +175,19 @@ const PsdEditor = () => {
     const drawDirtyRef = useRef(false);
     const drawRafRef   = useRef<number | null>(null);
     const centerRafRef = useRef<number | null>(null);
-    const zoomSelectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const resizeCleanupRef = useRef<(() => void) | null>(null);
+    const zoomSelectTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const resizeCleanupRef    = useRef<(() => void) | null>(null);
     const layerDragCleanupRef = useRef<(() => void) | null>(null);
     const favoriteDragCleanupRef = useRef<(() => void) | null>(null);
 
     const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
-    // ── ファイルを開く共通ロジック ──────────────────────────────────────────
+    // ── 初回ロード時センタリング ──────────────────────────────────────────────
 
     const isFirstLoadRef = useRef(true);
     useEffect(() => {
-        if (!psd) return;
-        if (!isFirstLoadRef.current) return;
+        if (!psd || !isFirstLoadRef.current) return;
         isFirstLoadRef.current = false;
         const el = scrollRef.current;
         if (!el) return;
@@ -187,9 +198,7 @@ const PsdEditor = () => {
             if (attempts < 10) centerRafRef.current = requestAnimationFrame(tryCenter);
         };
         centerRafRef.current = requestAnimationFrame(tryCenter);
-        return () => {
-            if (centerRafRef.current) cancelAnimationFrame(centerRafRef.current);
-        };
+        return () => { if (centerRafRef.current) cancelAnimationFrame(centerRafRef.current); };
     }, [psd, centerPsd]);
 
     const appWindow = getCurrentWindow();
@@ -250,16 +259,16 @@ const PsdEditor = () => {
         return collectSearchResults(psd.children, q);
     }, [searchQuery, psd]);
 
-    const lang = settings.language;
-    const exportFormat = (settings.exportFormat ?? 'png') as ExportFormat;
+    const lang           = settings.language;
+    const exportFormat   = (settings.exportFormat ?? 'png') as ExportFormat;
     const exportButtonLabel = useMemo(() => {
-        const labelMap: Record<ExportFormat, string> = { png: 'PNG', jpeg: 'JPG', webp: 'WebP', svg: 'SVG' };
-        return labelMap[exportFormat];
+        const m: Record<ExportFormat, string> = { png: 'PNG', jpeg: 'JPG', webp: 'WebP', svg: 'SVG' };
+        return m[exportFormat];
     }, [exportFormat]);
     const exportAriaLabel = useMemo(() => {
-        const label = exportButtonLabel;
-        return lang === 'ja' ? `${label}で書き出し` : `Export as ${label}`;
+        return lang === 'ja' ? `${exportButtonLabel}で書き出し` : `Export as ${exportButtonLabel}`;
     }, [exportButtonLabel, lang]);
+
     const L = useMemo(() => ({
         open: lang === 'ja' ? '開く' : 'Open',
         png: 'PNG',
@@ -301,20 +310,19 @@ const PsdEditor = () => {
         saveFailed: lang === 'ja' ? '保存に失敗しました' : 'Failed to save file',
         exportSuccess: lang === 'ja' ? 'エクスポートが完了しました' : 'Exported successfully!',
         exportFailed: lang === 'ja' ? 'エクスポートに失敗しました' : 'Failed to export',
-        // タブ
         newTab: lang === 'ja' ? '新しいタブ' : 'New tab',
         closeTab: lang === 'ja' ? 'タブを閉じる' : 'Close tab',
+        exportAllFavDone: (n: number) =>
+            lang === 'ja' ? `${n} 件のPNGを書き出しました` : `Exported ${n} PNG file(s)`,
     }), [lang]);
 
     const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
         setNotification({ message, type }), []);
 
-    // ── タブ切り替え時の状態保存 / 復元 ────────────────────────────────────
+    // ── タブ切り替え時の状態保存 / 復元 ─────────────────────────────────────
 
     const prevActiveIdRef = useRef<string>(activeId);
-    const outgoingUiRef = useRef({
-        zoom, flipX, flipY, closedKeys: Array.from(closedKeys),
-    });
+    const outgoingUiRef   = useRef({ zoom, flipX, flipY, closedKeys: Array.from(closedKeys) });
     outgoingUiRef.current = { zoom, flipX, flipY, closedKeys: Array.from(closedKeys) };
 
     useLayoutEffect(() => {
@@ -323,16 +331,12 @@ const PsdEditor = () => {
 
         const { zoom: z, flipX: fx, flipY: fy, closedKeys: ck } = outgoingUiRef.current;
         updateTab(prevId, {
-            zoom: z,
-            flipX: fx,
-            flipY: fy,
-            closedKeys: ck,
+            zoom: z, flipX: fx, flipY: fy, closedKeys: ck,
             scrollLeft: scrollRef.current?.scrollLeft ?? 0,
-            scrollTop: scrollRef.current?.scrollTop ?? 0,
+            scrollTop:  scrollRef.current?.scrollTop  ?? 0,
         });
 
         prevActiveIdRef.current = activeId;
-
         const nextTab = tabsRef.current.find(t => t.id === activeId);
         if (!nextTab) return;
 
@@ -342,48 +346,38 @@ const PsdEditor = () => {
         setFlipY(nextTab.flipY);
         setClosedKeys(new Set(nextTab.closedKeys));
         isFirstLoadRef.current = true;
-
         setZoomTo(nextTab.zoom);
         const el = scrollRef.current;
-        if (el) {
-            el.scrollLeft = nextTab.scrollLeft;
-            el.scrollTop = nextTab.scrollTop;
-        }
+        if (el) { el.scrollLeft = nextTab.scrollLeft; el.scrollTop = nextTab.scrollTop; }
     }, [activeId, updateTab, resetHistory, setZoomTo]);
 
-    // ── PSD 読み込み ───────────────────────────────────────────────────────
+    // ── PSD 読み込み ──────────────────────────────────────────────────────────
 
     const loadPsdFromFilePath = useCallback(async (filePath: string, tabId?: string) => {
-        // 既に同じファイルが開かれているタブがあればそちらをアクティブ
         if (tabManager.activateExistingTab(filePath)) return;
 
-        // tabId が指定されていれば既存タブに上書き、なければ新規タブ
-        const targetId = tabId ?? tabManager.openNewTab({ filePath, fileName: filePath.replace(/\\/g, '/').split('/').pop() ?? filePath, isLoading: true });
+        const targetId = tabId ?? tabManager.openNewTab({
+            filePath, fileName: filePath.replace(/\\/g, '/').split('/').pop() ?? filePath, isLoading: true,
+        });
         tabManager.updateTab(targetId, { isLoading: true });
 
         const g = (loadGenByTabRef.current.get(targetId) ?? 0) + 1;
         loadGenByTabRef.current.set(targetId, g);
-
         loadCountRef.current += 1;
         setIsLoading(true);
         isFirstLoadRef.current = true;
 
-        const tabStillTargeted = () =>
-            loadGenByTabRef.current.get(targetId) === g;
+        const tabStillTargeted = () => loadGenByTabRef.current.get(targetId) === g;
 
         try {
-            const data = await readFile(filePath);
+            const data   = await readFile(filePath);
             if (!tabStillTargeted()) return;
-
             const result = await loadPsd(data.buffer);
             if (!tabStillTargeted()) return;
-
             const nextPsd = result.layers.length > 0 ? attachThumbs(result.psd, result.layers) : result.psd;
             if (!tabStillTargeted()) return;
 
-            if (activeIdRef.current === targetId) {
-                resetHistory(nextPsd);
-            }
+            if (activeIdRef.current === targetId) resetHistory(nextPsd);
 
             tabManager.updateTab(targetId, {
                 psd: nextPsd,
@@ -393,38 +387,26 @@ const PsdEditor = () => {
                 isDirty: false,
             });
             addRecentFile(filePath);
-            if (activeIdRef.current === targetId) {
-                setCurrentFilePath(filePath);
-            }
+            if (activeIdRef.current === targetId) setCurrentFilePath(filePath);
         } catch (err) {
             if (tabStillTargeted()) {
                 showToast(`${L.loadFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error');
                 tabManager.updateTab(targetId, { isLoading: false });
             }
         } finally {
-            if (loadGenByTabRef.current.get(targetId) === g) {
-                loadGenByTabRef.current.delete(targetId);
-            }
+            if (loadGenByTabRef.current.get(targetId) === g) loadGenByTabRef.current.delete(targetId);
             loadCountRef.current -= 1;
-            if (loadCountRef.current <= 0) {
-                loadCountRef.current = 0;
-                setIsLoading(false);
-            }
+            if (loadCountRef.current <= 0) { loadCountRef.current = 0; setIsLoading(false); }
         }
     }, [loadPsd, resetHistory, addRecentFile, showToast, L, tabManager]);
 
     const openPsdUnified = useCallback((filePath: string) => {
         const activeTab = tabsRef.current.find(t => t.id === activeIdRef.current);
-        const canReuseActive =
-            !!activeTab &&
-            !activeTab.isLoading &&
-            !activeTab.filePath &&
-            !activeTab.psd;
-        const targetId = canReuseActive ? activeTab.id : undefined;
-        loadPsdFromFilePath(filePath, targetId);
+        const canReuseActive = !!activeTab && !activeTab.isLoading && !activeTab.filePath && !activeTab.psd;
+        loadPsdFromFilePath(filePath, canReuseActive ? activeTab.id : undefined);
     }, [loadPsdFromFilePath]);
 
-    // ── タブ新規作成 ────────────────────────────────────────────────────────
+    // ── タブ操作 ──────────────────────────────────────────────────────────────
 
     const handleNewTab = useCallback(() => {
         tabManager.openNewTab();
@@ -434,22 +416,16 @@ const PsdEditor = () => {
         setClosedKeys(new Set());
     }, [tabManager, resetHistory]);
 
-    // ── タブ閉じる ──────────────────────────────────────────────────────────
-
     const handleCloseTab = useCallback((id: string) => {
         loadGenByTabRef.current.delete(id);
-        startTransition(() => {
-            tabManager.closeTab(id);
-        });
+        startTransition(() => { tabManager.closeTab(id); });
     }, [tabManager]);
-
-    // ── タブ アクティブ切り替え ─────────────────────────────────────────────
 
     const handleActivateTab = useCallback((id: string) => {
         tabManager.setActiveId(id);
     }, [tabManager]);
 
-    // ── 起動引数・イベント受信 ─────────────────────────────────────────────
+    // ── 起動引数・Tauriイベント ───────────────────────────────────────────────
 
     useEffect(() => {
         const checkArgs = async () => {
@@ -463,38 +439,35 @@ const PsdEditor = () => {
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
-        const unlistenPromise = listen<string[]>('open-file', (event) => {
+        const p = listen<string[]>('open-file', (event) => {
             const psdFile = event.payload.slice(1).find(x => x.toLowerCase().endsWith('.psd'));
             if (psdFile) openPsdUnified(psdFile);
             getCurrentWindow().setFocus();
         });
-        return () => { unlistenPromise.then(u => u()); };
+        return () => { p.then(u => u()); };
     }, [openPsdUnified]);
 
     useEffect(() => {
-        const unlistenPromises = Promise.all([
-            listen('tauri://drag-over', () => setIsDragging(true)),
-            listen('tauri://drag-drop', (event: any) => {
+        const p = Promise.all([
+            listen('tauri://drag-over',  () => setIsDragging(true)),
+            listen('tauri://drag-drop',  (event: any) => {
                 setIsDragging(false);
                 const paths = event.payload.paths;
-                if (paths?.length > 0 && paths[0].toLowerCase().endsWith('.psd'))
-                    openPsdUnified(paths[0]);
+                if (paths?.length > 0 && paths[0].toLowerCase().endsWith('.psd')) openPsdUnified(paths[0]);
             }),
             listen('tauri://drag-leave', () => setIsDragging(false)),
         ]);
-        return () => { unlistenPromises.then(us => us.forEach(u => u())); };
+        return () => { p.then(us => us.forEach(u => u())); };
     }, [openPsdUnified]);
 
     const handleOpenFile = useCallback(async () => {
         try {
             const selected = await open({ multiple: false, filters: [{ name: 'PSD Image', extensions: ['psd'] }] });
-            if (selected && typeof selected === 'string') {
-                openPsdUnified(selected);
-            }
+            if (selected && typeof selected === 'string') openPsdUnified(selected);
         } catch (err) { showToast(`${L.openFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     }, [openPsdUnified, showToast, L]);
 
-    // ── キーボードショートカット ────────────────────────────────────────────
+    // ── キーボードショートカット ──────────────────────────────────────────────
 
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
@@ -511,41 +484,30 @@ const PsdEditor = () => {
             if (e.key === 'F11') { e.preventDefault(); handleToggleFullscreen(); return; }
             if (e.key.toLowerCase() === 'o' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleOpenFile(); return; }
             if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setShowSettings(true); return; }
-            // ブラウザ標準ショートカット無効化
             if (e.key === 'F5') { e.preventDefault(); return; }
             if (e.key === 'F12') { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'p' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'f' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'r' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return; }
             if (e.key.toLowerCase() === 'i' && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); return; }
-            // Zoom
             if ((e.key === '+' || e.key === ';') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(0.1); return; }
             if ((e.key === '=' || e.key === '-') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleZoom(-0.1); return; }
             if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); centerPsd(); return; }
-            // タブ切り替え Ctrl+Tab / Ctrl+Shift+Tab
             if (e.key === 'Tab' && e.ctrlKey) {
                 e.preventDefault();
-                const idx = tabs.findIndex(t => t.id === activeId);
-                const next = e.shiftKey
-                    ? (idx - 1 + tabs.length) % tabs.length
-                    : (idx + 1) % tabs.length;
+                const idx  = tabs.findIndex(t => t.id === activeId);
+                const next = e.shiftKey ? (idx - 1 + tabs.length) % tabs.length : (idx + 1) % tabs.length;
                 handleActivateTab(tabs[next].id);
             }
-            // Ctrl+W でタブを閉じる
-            if (e.key.toLowerCase() === 'w' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault(); handleCloseTab(activeId);
-            }
-            // Ctrl+T で新しいタブ
-            if (e.key.toLowerCase() === 't' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault(); handleNewTab();
-            }
+            if (e.key.toLowerCase() === 'w' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleCloseTab(activeId); }
+            if (e.key.toLowerCase() === 't' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNewTab(); }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [handleUndo, handleRedo, handleOpenFile, handleToggleFullscreen, handleZoom, centerPsd,
         tabs, activeId, handleActivateTab, handleCloseTab, handleNewTab]);
 
-    // ── サイドバーリサイズ ──────────────────────────────────────────────────
+    // ── サイドバーリサイズ ────────────────────────────────────────────────────
 
     const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
@@ -556,10 +518,7 @@ const PsdEditor = () => {
             setSidebarWidth(Math.max(200, Math.min(600, ev.clientX)));
         };
         const onMouseUp = () => {
-            if (resizeCleanupRef.current) {
-                resizeCleanupRef.current();
-                resizeCleanupRef.current = null;
-            }
+            if (resizeCleanupRef.current) { resizeCleanupRef.current(); resizeCleanupRef.current = null; }
         };
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
@@ -571,7 +530,7 @@ const PsdEditor = () => {
         };
     }, []);
 
-    // ── 保存 ────────────────────────────────────────────────────────────────
+    // ── 保存 ──────────────────────────────────────────────────────────────────
 
     const handleSaveFile = async () => {
         if (!psd) return;
@@ -582,22 +541,23 @@ const PsdEditor = () => {
             });
             if (selected) {
                 await writeFile(selected, new Uint8Array(writePsd(psd) as ArrayBuffer));
-                tabManager.updateTab(activeId, { isDirty: false, filePath: selected, fileName: selected.replace(/\\/g, '/').split('/').pop() ?? selected });
+                tabManager.updateTab(activeId, {
+                    isDirty: false, filePath: selected,
+                    fileName: selected.replace(/\\/g, '/').split('/').pop() ?? selected,
+                });
                 showToast(L.saveSuccess);
             }
         } catch (err) { showToast(`${L.saveFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
-    // ── 書き出し（マルチフォーマット対応） ─────────────────────────────────
+    // ── 書き出し ──────────────────────────────────────────────────────────────
 
     const handleExportPng = async () => {
         if (!canvasRef.current || !psd) return;
-        const fmt = (settings.exportFormat ?? 'png') as ExportFormat;
+        const fmt     = (settings.exportFormat ?? 'png') as ExportFormat;
         const quality = settings.exportQuality ?? 0.92;
-
-        const extMap: Record<ExportFormat, string> = { png: 'png', jpeg: 'jpg', webp: 'webp', svg: 'svg' };
+        const extMap:  Record<ExportFormat, string> = { png: 'png', jpeg: 'jpg', webp: 'webp', svg: 'svg' };
         const nameMap: Record<ExportFormat, string> = { png: 'PNG Image', jpeg: 'JPEG Image', webp: 'WebP Image', svg: 'SVG File' };
-
         try {
             const selected = await save({
                 title: `Export as ${fmt.toUpperCase()}`,
@@ -611,7 +571,7 @@ const PsdEditor = () => {
         } catch (err) { showToast(`${L.exportFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
 
-    // ── クリップボードコピー ────────────────────────────────────────────────
+    // ── クリップボードコピー ──────────────────────────────────────────────────
 
     const handleCopyCanvas = useCallback(async () => {
         const canvas = canvasRef.current;
@@ -628,7 +588,7 @@ const PsdEditor = () => {
         } catch (err) { showToast(`${L.copyFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     }, [showToast, L]);
 
-    // ── レイヤー操作 ────────────────────────────────────────────────────────
+    // ── レイヤー操作 ──────────────────────────────────────────────────────────
 
     const toggleLayerVisibility = useCallback((path: number[]) => {
         if (!psdRef.current) return;
@@ -668,7 +628,7 @@ const PsdEditor = () => {
             const newPsd = { ...p, children: [...(p.children || [])] };
             let arr = newPsd.children;
             const pathCopy = [...pathArgs];
-            const lastIdx = pathCopy.pop()!;
+            const lastIdx  = pathCopy.pop()!;
             for (const idx of pathCopy) { arr[idx] = { ...arr[idx], children: [...(arr[idx].children || [])] }; arr = arr[idx].children!; }
             arr.splice(lastIdx, 1);
             return newPsd;
@@ -679,10 +639,10 @@ const PsdEditor = () => {
 
     // ── ドラッグ&ドロップ (レイヤー並び替え) ─────────────────────────────────
 
-    const itemRectsRef  = useRef<{ rect: DOMRect; path: number[]; isGroup: boolean }[]>([]);
+    const itemRectsRef   = useRef<{ rect: DOMRect; path: number[]; isGroup: boolean }[]>([]);
     const cacheItemRects = useCallback(() => {
         const scroll = layerScrollRef.current; if (!scroll) return;
-        const items = Array.from(scroll.querySelectorAll<HTMLElement>('[data-path]'));
+        const items  = Array.from(scroll.querySelectorAll<HTMLElement>('[data-path]'));
         itemRectsRef.current = items.map(el => ({
             rect: el.getBoundingClientRect(),
             path: (el.getAttribute('data-path') ?? '').split('-').map(Number),
@@ -696,9 +656,9 @@ const PsdEditor = () => {
         for (const { rect, path, isGroup } of items) {
             const zone = rect.height * 0.25;
             let position: any, dist: number;
-            if (clientY < rect.top + zone)           { position = 'before'; dist = Math.abs(clientY - rect.top); }
-            else if (clientY > rect.bottom - zone)   { position = 'after';  dist = Math.abs(clientY - rect.bottom); }
-            else if (isGroup)                        { position = 'inside'; dist = Math.abs(clientY - (rect.top + rect.height / 2)); }
+            if (clientY < rect.top + zone)         { position = 'before'; dist = Math.abs(clientY - rect.top); }
+            else if (clientY > rect.bottom - zone) { position = 'after';  dist = Math.abs(clientY - rect.bottom); }
+            else if (isGroup)                      { position = 'inside'; dist = Math.abs(clientY - (rect.top + rect.height / 2)); }
             else { position = clientY < rect.top + rect.height / 2 ? 'before' : 'after'; dist = Math.abs(clientY - (rect.top + rect.height / 2)); }
             if (!best || dist < best.dist) best = { path, position, dist };
         }
@@ -727,10 +687,7 @@ const PsdEditor = () => {
         const onMouseUp = (ev: MouseEvent) => {
             const state = dragStateRef.current; dragStateRef.current = null;
             setDraggingPath(null); setDropTarget(null);
-            if (layerDragCleanupRef.current) {
-                layerDragCleanupRef.current();
-                layerDragCleanupRef.current = null;
-            }
+            if (layerDragCleanupRef.current) { layerDragCleanupRef.current(); layerDragCleanupRef.current = null; }
             if (!state?.moved) return;
             const target = findDropTargetFromCache(ev.clientY);
             if (!target) return;
@@ -748,39 +705,37 @@ const PsdEditor = () => {
         };
     }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd, tabManager]);
 
-    // ── フリップ関連 ────────────────────────────────────────────────────────
+    // ── フリップ ──────────────────────────────────────────────────────────────
 
-    const getFlipSuffix  = useCallback(() => {
+    const getFlipSuffix = useCallback(() => {
         if (flipX && flipY) return ':flipxy'; if (flipX) return ':flipx'; if (flipY) return ':flipy'; return '';
     }, [flipX, flipY]);
-    const hasFlipSuffix  = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
-    const getBaseName    = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
+    const hasFlipSuffix = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
+    const getBaseName   = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
 
-    // ── Canvas 描画 ─────────────────────────────────────────────────────────
+    // ── Canvas 描画 ───────────────────────────────────────────────────────────
 
     const drawCanvas = useCallback(() => {
-        const canvas = canvasRef.current;
+        const canvas     = canvasRef.current;
         const currentPsd = psdRef.current;
         if (!canvas || !currentPsd) return;
         const ctx = canvas.getContext('2d'); if (!ctx) return;
-        const w = currentPsd.width;
-        const h = currentPsd.height;
-        if (canvas.width !== w || canvas.height !== h) {
-            canvas.width = w;
-            canvas.height = h;
-        } else {
-            ctx.clearRect(0, 0, w, h);
-        }
+        const w = currentPsd.width, h = currentPsd.height;
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        else { ctx.clearRect(0, 0, w, h); }
+
         const flipSuffix = flipEnabled ? getFlipSuffix() : '';
         ctx.save();
-        if (flipX && flipY) { ctx.translate(currentPsd.width, currentPsd.height); ctx.scale(-1, -1); }
-        else if (flipX)     { ctx.translate(currentPsd.width, 0);                  ctx.scale(-1, 1); }
-        else if (flipY)     { ctx.translate(0, currentPsd.height);                 ctx.scale(1, -1); }
+        if (flipX && flipY) { ctx.translate(w, h); ctx.scale(-1, -1); }
+        else if (flipX)     { ctx.translate(w, 0); ctx.scale(-1,  1); }
+        else if (flipY)     { ctx.translate(0, h); ctx.scale( 1, -1); }
+
         const drawLayers = (layers: any[]) => {
             const flipMap = new Map();
             if (flipEnabled && flipSuffix) {
-                for (const l of layers) if ((l.name || '').toLowerCase().endsWith(flipSuffix.toLowerCase()))
-                    flipMap.set(getBaseName(l.name || '').toLowerCase(), l);
+                for (const l of layers)
+                    if ((l.name || '').toLowerCase().endsWith(flipSuffix.toLowerCase()))
+                        flipMap.set(getBaseName(l.name || '').toLowerCase(), l);
             }
             for (const layer of layers) {
                 if (layer.hidden) continue;
@@ -806,22 +761,79 @@ const PsdEditor = () => {
         return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
     }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
 
-    // ── お気に入り ──────────────────────────────────────────────────────────
+    // ── お気に入り ────────────────────────────────────────────────────────────
 
     const handleApplyFavorite = useCallback((fav: LayerFavorite) => {
         if (!psdRef.current) return;
-        const current = psdRef.current;
-        const nextChildren = current.children ? applyLayerState(current.children, fav.state) : current.children;
+        const current     = psdRef.current;
+        const nextChildren = current.children
+            ? applyLayerState(current.children, fav.state)
+            : current.children;
         commitPsd({ ...current, children: nextChildren });
         setClosedKeys(new Set(fav.closedKeys ?? []));
-        if (fav.zoom)                           setZoomTo(fav.zoom);
-        if (typeof fav.flipX === 'boolean')     setFlipX(fav.flipX);
-        if (typeof fav.flipY === 'boolean')     setFlipY(fav.flipY);
+        if (fav.zoom)                            setZoomTo(fav.zoom);
+        if (typeof fav.flipX === 'boolean')      setFlipX(fav.flipX);
+        if (typeof fav.flipY === 'boolean')      setFlipY(fav.flipY);
         if (typeof fav.radioEnabled === 'boolean')  setRadioEnabled(fav.radioEnabled);
         if (typeof fav.lockedEnabled === 'boolean') setLockedEnabled(fav.lockedEnabled);
         if (typeof fav.flipEnabled === 'boolean')   setFlipEnabled(fav.flipEnabled);
         showToast(L.applied);
     }, [commitPsd, psdRef, showToast, L, setZoomTo]);
+
+    // ── お気に入り PNG 書き出し（1件）────────────────────────────────────────
+
+    const handleExportFavoriteImage = useCallback(async (fav: LayerFavorite) => {
+        if (!psdRef.current) return;
+        const current     = psdRef.current;
+        const tmpChildren = current.children
+            ? applyLayerState(current.children, fav.state)
+            : current.children;
+        const tmpPsd = { ...current, children: tmpChildren };
+
+        try {
+            const bytes    = await renderPsdToBytes(tmpPsd);
+            const safeName = fav.name.replace(/[\\/:*?"<>|]/g, '_');
+            const selected = await save({
+                title: lang === 'ja' ? `「${fav.name}」をPNGで書き出し` : `Export "${fav.name}" as PNG`,
+                defaultPath: `${safeName}.png`,
+                filters: [{ name: 'PNG Image', extensions: ['png'] }],
+            });
+            if (selected) {
+                await writeFile(selected, bytes);
+                showToast(L.exportSuccess);
+            }
+        } catch (err) {
+            showToast(`${L.exportFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error');
+        }
+    }, [psdRef, showToast, L, lang]);
+
+    // ── お気に入り PNG 書き出し（全件一括）───────────────────────────────────
+
+    const handleExportAllFavoriteImages = useCallback(async () => {
+        if (!psdRef.current || favorites.length === 0) return;
+        try {
+            const dir = await open({ directory: true, title: lang === 'ja' ? '出力フォルダを選択' : 'Select output folder' });
+            if (!dir || typeof dir !== 'string') return;
+
+            let done = 0;
+            for (const fav of favorites) {
+                const current     = psdRef.current!;
+                const tmpChildren = current.children
+                    ? applyLayerState(current.children, fav.state)
+                    : current.children;
+                const tmpPsd   = { ...current, children: tmpChildren };
+                const bytes    = await renderPsdToBytes(tmpPsd);
+                const safeName = fav.name.replace(/[\\/:*?"<>|]/g, '_');
+                await writeFile(`${dir}/${safeName}.png`, bytes);
+                done++;
+            }
+            showToast(L.exportAllFavDone(done));
+        } catch (err) {
+            showToast(`${L.exportFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error');
+        }
+    }, [psdRef, favorites, showToast, L, lang]);
+
+    // ── お気に入り保存ダイアログ ──────────────────────────────────────────────
 
     const openCreateFavorite = useCallback(() => {
         if (!psdRef.current?.children) return;
@@ -831,31 +843,59 @@ const PsdEditor = () => {
     const confirmFavoriteDialog = useCallback(() => {
         if (!favoriteDialog) return;
         const name = favoriteDialog.value.trim(); if (!name) return;
+
         if (favoriteDialog.mode === 'create') {
             if (!psdRef.current?.children) return;
-            saveFavorite(name, captureLayerState(psdRef.current.children), Array.from(closedKeys), {
-                zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled,
-            });
+
+            // キャンバスから 64px サムネイル dataUrl を生成
+            const previewDataUrl = (() => {
+                const src = canvasRef.current;
+                if (!src) return undefined;
+                const SIZE = 64;
+                const tmp  = document.createElement('canvas');
+                const { width: sw, height: sh } = src;
+                const scale = Math.min(SIZE / sw, SIZE / sh, 1);
+                tmp.width  = Math.max(1, Math.round(sw * scale));
+                tmp.height = Math.max(1, Math.round(sh * scale));
+                const ctx = tmp.getContext('2d');
+                if (!ctx) return undefined;
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(src, 0, 0, tmp.width, tmp.height);
+                return tmp.toDataURL('image/png');
+            })();
+
+            saveFavorite(
+                name,
+                captureLayerState(psdRef.current.children),
+                Array.from(closedKeys),
+                { zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled, previewDataUrl },
+            );
             showToast(L.saved);
         } else if (favoriteDialog.mode === 'rename' && favoriteDialog.id) {
             updateFavoriteName(favoriteDialog.id, name);
         }
         setFavoriteDialog(null);
-    }, [favoriteDialog, psdRef, saveFavorite, closedKeys, zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled, showToast, L, updateFavoriteName]);
+    }, [favoriteDialog, psdRef, saveFavorite, closedKeys, zoom, flipX, flipY,
+        radioEnabled, lockedEnabled, flipEnabled, showToast, L, updateFavoriteName]);
 
-    const cacheFavoriteRects  = useCallback(() => {
+    // ── お気に入りドラッグ&ドロップ（並び替え）───────────────────────────────
+
+    const cacheFavoriteRects = useCallback(() => {
         const root = favoriteListRef.current; if (!root) return;
         const items = Array.from(root.querySelectorAll<HTMLElement>('[data-favorite-id]'));
-        favoriteRectsRef.current = items.map(el => ({ id: el.getAttribute('data-favorite-id') || '', rect: el.getBoundingClientRect() })).filter(x => x.id);
+        favoriteRectsRef.current = items
+            .map(el => ({ id: el.getAttribute('data-favorite-id') || '', rect: el.getBoundingClientRect() }))
+            .filter(x => x.id);
     }, []);
 
     const findFavoriteDropTarget = useCallback((clientY: number) => {
         const items = favoriteRectsRef.current; if (!items.length) return null;
         let best: any = null;
         for (const { id, rect } of items) {
-            const mid = rect.top + rect.height / 2;
+            const mid      = rect.top + rect.height / 2;
             const position = clientY < mid ? 'before' : 'after';
-            const dist = Math.abs(clientY - mid);
+            const dist     = Math.abs(clientY - mid);
             if (!best || dist < best.dist) best = { id, position, dist };
         }
         return best ? { id: best.id, position: best.position } : null;
@@ -872,16 +912,13 @@ const PsdEditor = () => {
             setFavoriteDrop(target?.id !== favoriteDragStateRef.current.id ? target : null);
         };
         const onMouseUp = (ev: MouseEvent) => {
-            const state = favoriteDragStateRef.current; favoriteDragStateRef.current = null;
+            const state  = favoriteDragStateRef.current; favoriteDragStateRef.current = null;
             const target = findFavoriteDropTarget(ev.clientY);
             setFavoriteDrop(null);
-            if (favoriteDragCleanupRef.current) {
-                favoriteDragCleanupRef.current();
-                favoriteDragCleanupRef.current = null;
-            }
+            if (favoriteDragCleanupRef.current) { favoriteDragCleanupRef.current(); favoriteDragCleanupRef.current = null; }
             if (!state?.moved || !target || target.id === state.id) return;
             const from = favorites.findIndex(f => f.id === state.id);
-            let to = favorites.findIndex(f => f.id === target.id);
+            let to     = favorites.findIndex(f => f.id === target.id);
             if (from === -1 || to === -1) return;
             if (target.position === 'after') to++;
             if (from < to) to--;
@@ -895,27 +932,27 @@ const PsdEditor = () => {
         };
     }, [cacheFavoriteRects, findFavoriteDropTarget, favorites, moveFavoriteTo]);
 
-    // ── Cleanup (avoid leaks on unmount) ─────────────────────────────────────
+    // ── Cleanup ───────────────────────────────────────────────────────────────
 
     useEffect(() => {
         return () => {
-            if (zoomSelectTimerRef.current) clearTimeout(zoomSelectTimerRef.current);
-            if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-            if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
-            if (centerRafRef.current) cancelAnimationFrame(centerRafRef.current);
-            if (resizeCleanupRef.current) resizeCleanupRef.current();
-            if (layerDragCleanupRef.current) layerDragCleanupRef.current();
+            if (zoomSelectTimerRef.current)    clearTimeout(zoomSelectTimerRef.current);
+            if (renameTimerRef.current)        clearTimeout(renameTimerRef.current);
+            if (drawRafRef.current)            cancelAnimationFrame(drawRafRef.current);
+            if (centerRafRef.current)          cancelAnimationFrame(centerRafRef.current);
+            if (resizeCleanupRef.current)      resizeCleanupRef.current();
+            if (layerDragCleanupRef.current)   layerDragCleanupRef.current();
             if (favoriteDragCleanupRef.current) favoriteDragCleanupRef.current();
         };
     }, []);
 
-    // ── テーマ即時プレビュー ────────────────────────────────────────────────
+    // ── テーマプレビュー ──────────────────────────────────────────────────────
 
     const handlePreviewTheme = useCallback((theme: AppSettings['theme']) => {
         updateSettings({ theme });
     }, [updateSettings]);
 
-    // ── Render ──────────────────────────────────────────────────────────────
+    // ── Render ────────────────────────────────────────────────────────────────
 
     return (
         <div className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}>
@@ -934,14 +971,10 @@ const PsdEditor = () => {
                 exportAriaLabel={exportAriaLabel}
             />
 
-            {/* ── タブバー ── */}
             <TabBar
-                tabs={tabs}
-                activeId={activeId}
-                onActivate={handleActivateTab}
-                onClose={handleCloseTab}
-                onNewTab={handleNewTab}
-                onReorder={tabManager.reorderTabs}
+                tabs={tabs} activeId={activeId}
+                onActivate={handleActivateTab} onClose={handleCloseTab}
+                onNewTab={handleNewTab} onReorder={tabManager.reorderTabs}
                 language={settings.language}
             />
 
@@ -967,6 +1000,10 @@ const PsdEditor = () => {
                     favoriteDrop={favoriteDrop} favoriteListRef={favoriteListRef}
                     layerScrollRef={layerScrollRef} formatFavoriteTime={formatFavoriteTime}
                     lang={settings.language} L={L}
+                    importFavorites={importFavorites}
+                    onExportFavoriteImage={handleExportFavoriteImage}
+                    onExportAllFavoriteImages={handleExportAllFavoriteImages}
+                    currentFilePath={currentFilePath}
                 />
 
                 <div className="sidebar-resizer" onMouseDown={handleResizerMouseDown} />
@@ -990,10 +1027,8 @@ const PsdEditor = () => {
 
             {showSettings && (
                 <SettingsModal
-                    settings={settings}
-                    onUpdate={updateSettings}
-                    onClose={() => setShowSettings(false)}
-                    onPreview={handlePreviewTheme}
+                    settings={settings} onUpdate={updateSettings}
+                    onClose={() => setShowSettings(false)} onPreview={handlePreviewTheme}
                 />
             )}
 

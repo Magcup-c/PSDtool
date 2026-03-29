@@ -20,73 +20,114 @@
         "zoomHotkeysEnabled": false
       }
     ],
-    "security": {
-      "csp": null
-    }
+    "security": { "csp": null }
   },
   "plugins": {
     "cli": {
-        "description": "PSD Studio CLI",
-        "args": [
-            {
-                "name": "input",
-                "description": "Path to the PSD file to open",
-                "index": 1,
-                "takesValue": true
-            }
-        ],
-        "subcommands": {
-            "open": {
-                "description": "Open a file in the editor",
-                "args": [
-                    {
-                        "name": "path",
-                        "description": "Path to the PSD file",
-                        "index": 1,
-                        "required": true,
-                        "takesValue": true
-                    }
-                ]
-            },
-            "convert": {
-                "description": "Export a PSD file to PNG directly (Headless)",
-                "args": [
-                    {
-                        "name": "input",
-                        "description": "Input PSD file path",
-                        "index": 1,
-                        "required": true,
-                        "takesValue": true
-                    },
-                    {
-                        "name": "output",
-                        "description": "Output PNG file path",
-                        "index": 2,
-                        "required": true,
-                        "takesValue": true
-                    }
-                ]
-            }
+      "description": "PSD Studio CLI — headless PSD processing tools",
+      "args": [
+        { "name": "input", "description": "PSD file to open (GUI mode)", "index": 1, "takesValue": true }
+      ],
+      "subcommands": {
+        "open": {
+          "description": "Open a PSD file in the GUI editor",
+          "args": [{ "name": "path", "index": 1, "required": true, "takesValue": true }]
+        },
+        "convert": {
+          "description": "Convert a single PSD → PNG (headless)",
+          "args": [
+            { "name": "input",  "index": 1, "required": true, "takesValue": true },
+            { "name": "output", "index": 2, "required": true, "takesValue": true }
+          ]
+        },
+        "batch": {
+          "description": "Batch-convert PSD files matching a glob pattern",
+          "args": [
+            { "name": "pattern", "index": 1, "required": true, "takesValue": true },
+            { "name": "output",  "short": "o", "takesValue": true },
+            { "name": "format",  "short": "f", "takesValue": true },
+            { "name": "verbose", "short": "v", "takesValue": false }
+          ]
+        },
+        "info": {
+          "description": "Extract PSD metadata as JSON",
+          "args": [
+            { "name": "input",  "index": 1, "required": true, "takesValue": true },
+            { "name": "output", "short": "o", "takesValue": true },
+            { "name": "pretty", "short": "p", "takesValue": false }
+          ]
+        },
+        "thumbnail": {
+          "description": "Generate a thumbnail from a PSD file",
+          "args": [
+            { "name": "input",  "index": 1, "required": true, "takesValue": true },
+            { "name": "output", "index": 2, "required": true, "takesValue": true },
+            { "name": "size",   "short": "s", "takesValue": true }
+          ]
+        },
+        "layers": {
+          "description": "List or manipulate layer visibility",
+          "args": [
+            { "name": "input",  "index": 1, "required": true, "takesValue": true },
+            { "name": "list",   "short": "l", "takesValue": false },
+            { "name": "show",   "takesValue": true },
+            { "name": "hide",   "takesValue": true },
+            { "name": "output", "short": "o", "takesValue": true }
+          ]
+        },
+        "export-layers": {
+          "description": "Export each layer as an individual image file",
+          "args": [
+            { "name": "input",        "index": 1, "required": true, "takesValue": true },
+            { "name": "output",       "short": "o", "takesValue": true },
+            { "name": "format",       "short": "f", "takesValue": true },
+            { "name": "visible-only", "takesValue": false },
+            { "name": "flatten",      "takesValue": false }
+          ]
+        },
+        "compare": {
+          "description": "Generate a diff image highlighting changes between two PSDs",
+          "args": [
+            { "name": "input-a",   "index": 1, "required": true, "takesValue": true },
+            { "name": "input-b",   "index": 2, "required": true, "takesValue": true },
+            { "name": "output",    "short": "o", "takesValue": true },
+            { "name": "threshold", "short": "t", "takesValue": true },
+            { "name": "highlight", "takesValue": true }
+          ]
+        },
+        "sprite": {
+          "description": "Combine multiple PSDs into a single sprite sheet",
+          "args": [
+            { "name": "pattern", "index": 1, "required": true, "takesValue": true },
+            { "name": "output",  "short": "o", "takesValue": true },
+            { "name": "layout",  "takesValue": true },
+            { "name": "cols",    "takesValue": true },
+            { "name": "padding", "takesValue": true },
+            { "name": "format",  "short": "f", "takesValue": true },
+            { "name": "json",    "takesValue": true }
+          ]
+        },
+        "watch": {
+          "description": "Watch a directory and auto-convert PSD files on save",
+          "args": [
+            { "name": "dir",      "index": 1, "takesValue": true },
+            { "name": "output",   "short": "o", "takesValue": true },
+            { "name": "format",   "short": "f", "takesValue": true },
+            { "name": "debounce", "takesValue": true }
+          ]
         }
+      }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/32x32.png", "icons/128x128.png",
+      "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"
     ],
     "fileAssociations": [
-      {
-        "ext": ["psd"],
-        "name": "PSD Image",
-        "description": "Adobe Photoshop Document",
-        "role": "Viewer"
-      }
+      { "ext": ["psd"], "name": "PSD Image", "description": "Adobe Photoshop Document", "role": "Viewer" }
     ]
   }
 }

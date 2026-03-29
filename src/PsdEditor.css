@@ -2600,11 +2600,29 @@ canvas {
 .settings-quality-slider-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
+}
+
+.settings-quality-input {
+    width: 48px;
+    min-width: 48px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--fg-2);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    text-align: right;
+    outline: none;
+    margin-left: auto;
+}
+
+.settings-quality-input:focus {
+    border-color: var(--accent);
 }
 
 .settings-quality-value {
-    min-width: 36px;
+    min-width: 18px;
     text-align: right;
     font-size: 11px;
     color: var(--fg-2);
@@ -2640,4 +2658,73 @@ canvas {
     background: var(--hover);
     color: var(--fg);
     border-color: var(--line);
+}
+
+/* =============================================================================
+   FAVORITES — 追加スタイル（PsdEditor.css 末尾に追記）
+============================================================================= */
+
+/* お気に入りアイテム内のプレビューサムネイル */
+.favorite-preview-thumb {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    border-radius: 3px;
+    border: 1px solid var(--line);
+    object-fit: contain;
+    background-color: #fff;
+    background-image:
+        linear-gradient(45deg, #e8e8e8 25%, transparent 25%),
+        linear-gradient(-45deg, #e8e8e8 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #e8e8e8 75%),
+        linear-gradient(-45deg, transparent 75%, #e8e8e8 75%);
+    background-size: 6px 6px;
+    background-position: 0 0, 0 3px, 3px -3px, -3px 0;
+    flex-shrink: 0;
+}
+
+.theme-black .favorite-preview-thumb,
+.theme-grey  .favorite-preview-thumb {
+    background-color: #1a1a1a;
+    background-image:
+        linear-gradient(45deg, #222 25%, transparent 25%),
+        linear-gradient(-45deg, #222 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #222 75%),
+        linear-gradient(-45deg, transparent 75%, #222 75%);
+}
+
+/* JSON ドラッグ&ドロップ時のオーバーレイ */
+.layer-panel {
+    position: relative; /* overlay の基準 */
+}
+
+.favorites-drop-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--accent);
+    border-radius: 4px;
+    pointer-events: none;
+    animation: settingsFadeIn 0.12s ease;
+}
+
+.favorites-drop-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: center;
+}
+
+/* import mode トグルボタンがアクティブ時 */
+.favorite-add.btn-active {
+    background: var(--active);
+    color: var(--accent);
 }
