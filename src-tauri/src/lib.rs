@@ -33,13 +33,66 @@ fn open_default_app_settings() -> Result<(), String> {
     }
 }
 
-fn handle_cli_result<T, E: std::fmt::Display>(result: Result<T, E>) {
-    match result {
-        Ok(_) => std::process::exit(0),
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+#[cfg(target_os = "windows")]
+fn is_launched_from_explorer() -> bool {
+    use windows::Win32::System::Threading::{
+        OpenProcess, GetCurrentProcessId, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
+    use windows::Win32::System::Console::GetConsoleWindow;
+    use windows::Win32::Foundation::CloseHandle;
+
+    unsafe {
+        // コンソールウィンドウが存在しない = windows_subsystem="windows"ビルド
+        // 存在する場合、親プロセス名で判断
+        if GetConsoleWindow().0 == 0 {
+            return true;
         }
+
+        // 親プロセスIDを取得
+        let snapshot = windows::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot(
+            windows::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPPROCESS,
+            0,
+        );
+        let Ok(snapshot) = snapshot else { return false };
+
+        let current_pid = GetCurrentProcessId();
+        let mut entry = windows::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<windows::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+
+        let mut parent_pid = 0u32;
+        if windows::Win32::System::Diagnostics::ToolHelp::Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32ProcessID == current_pid {
+                    parent_pid = entry.th32ParentProcessID;
+                    break;
+                }
+                if windows::Win32::System::Diagnostics::ToolHelp::Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+
+        if parent_pid == 0 { return false; }
+
+        // 親プロセスの実行ファイル名を取得
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, parent_pid) else {
+            return false;
+        };
+        let mut buf = [0u16; 260];
+        let len = GetModuleFileNameExW(handle, None, &mut buf);
+        let _ = CloseHandle(handle);
+
+        if len == 0 { return false; }
+
+        let name = String::from_utf16_lossy(&buf[..len as usize]);
+        let lower = name.to_lowercase();
+
+        // explorer.exe から起動された場合のみGUIモード扱い
+        lower.ends_with("explorer.exe")
     }
 }
 
@@ -495,6 +548,218 @@ fn cmd_watch(watch_dir: &str, output_dir: &str, format: &str, debounce_ms: u64) 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+        // Windowsでコンソール窓を非表示にする（CLIモード以外の場合）
+    #[cfg(target_os = "windows")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let is_cli = args.get(1).map(|s| {
+            matches!(s.as_str(),
+                "convert" | "batch" | "info" | "thumbnail" |
+                "layers" | "export-layers" | "compare" | "sprite" | "watch"
+            )
+        }).unwrap_or(false);
+
+        // CLIコマンド指定なし かつ エクスプローラーから起動 → コンソールを切り離す
+        if !is_cli && is_launched_from_explorer() {
+            unsafe {
+                windows::Win32::System::Console::FreeConsole();
+            }
+        }
+    }
+
+    // 以降は既存のCLI判定・Tauri起動処理...
+
+    // ① Tauri を起動する前に引数を見てCLIか判定
+    let args: Vec<String> = std::env::args().collect();
+    
+    if let Some(subcmd) = args.get(1).map(|s| s.as_str()) {
+        match subcmd {
+            "convert" => {
+                match (args.get(2), args.get(3)) {
+                    (Some(i), Some(o)) => exit_on(cmd_convert(i, o)),
+                    _ => { eprintln!("Usage: psdStudio convert <input.psd> <output.png>"); std::process::exit(1); }
+                }
+            }
+            "batch" => {
+                // args から自前でパース
+                let pattern = args.get(2).map(|s| s.as_str());
+                let mut output = "./output";
+                let mut format = "png";
+                let mut verbose = false;
+                let mut i = 3;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-o" | "--output"  => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "-f" | "--format"  => { i += 1; if let Some(v) = args.get(i) { format = v; } }
+                        "-v" | "--verbose" => { verbose = true; }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                match pattern {
+                    Some(p) => exit_on(cmd_batch(p, output, format, verbose)),
+                    None => { eprintln!("Usage: psdStudio batch <\"*.psd\"> [-o DIR] [-f png|jpeg|webp] [-v]"); std::process::exit(1); }
+                }
+            }
+            "info" => {
+                let input = args.get(2).map(|s| s.as_str());
+                let mut output: Option<&str> = None;
+                let mut pretty = true;
+                let mut i = 3;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-o" | "--output" => { i += 1; output = args.get(i).map(|s| s.as_str()); }
+                        "-p" | "--pretty" => { pretty = true; }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                match input {
+                    Some(inp) => exit_on(cmd_info(inp, output, pretty)),
+                    None => { eprintln!("Usage: psdStudio info <input.psd> [-o out.json]"); std::process::exit(1); }
+                }
+            }
+            "thumbnail" => {
+                let input  = args.get(2).map(|s| s.as_str());
+                let output = args.get(3).map(|s| s.as_str());
+                let mut size = 256u32;
+                let mut i = 4;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-s" | "--size" => { i += 1; if let Some(v) = args.get(i) { size = v.parse().unwrap_or(256); } }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                match (input, output) {
+                    (Some(i), Some(o)) => exit_on(cmd_thumbnail(i, o, size)),
+                    _ => { eprintln!("Usage: psdStudio thumbnail <input.psd> <output.png> [-s 256]"); std::process::exit(1); }
+                }
+            }
+            "layers" => {
+                let input = args.get(2).map(|s| s.as_str());
+                let mut output = "output.png";
+                let mut list_only = false;
+                let mut show_pat = String::new();
+                let mut hide_pat = String::new();
+                let mut i = 3;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-l" | "--list"   => { list_only = true; }
+                        "-o" | "--output" => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "--show"          => { i += 1; if let Some(v) = args.get(i) { show_pat = v.clone(); } }
+                        "--hide"          => { i += 1; if let Some(v) = args.get(i) { hide_pat = v.clone(); } }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                let show: Vec<&str> = show_pat.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                let hide: Vec<&str> = hide_pat.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                match input {
+                    Some(inp) => exit_on(cmd_layers(inp, output, &show, &hide, list_only)),
+                    None => { eprintln!("Usage: psdStudio layers <input.psd> [--list] [--show A,B] [--hide C] [-o out.png]"); std::process::exit(1); }
+                }
+            }
+            "export-layers" => {
+                let input = args.get(2).map(|s| s.as_str());
+                let mut output = "./layers";
+                let mut format = "png";
+                let mut visible_only = false;
+                let mut flatten = false;
+                let mut i = 3;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-o" | "--output"       => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "-f" | "--format"       => { i += 1; if let Some(v) = args.get(i) { format = v; } }
+                        "--visible-only"        => { visible_only = true; }
+                        "--flatten"             => { flatten = true; }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                match input {
+                    Some(inp) => exit_on(cmd_export_layers(inp, output, format, visible_only, flatten)),
+                    None => { eprintln!("Usage: psdStudio export-layers <input.psd> [-o DIR] [-f png|jpeg|webp] [--visible-only] [--flatten]"); std::process::exit(1); }
+                }
+            }
+            "compare" => {
+                let a = args.get(2).map(|s| s.as_str());
+                let b = args.get(3).map(|s| s.as_str());
+                let mut output = "diff.png";
+                let mut threshold = 10u8;
+                let mut highlight = "red";
+                let mut i = 4;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-o" | "--output"    => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "-t" | "--threshold" => { i += 1; if let Some(v) = args.get(i) { threshold = v.parse().unwrap_or(10); } }
+                        "--highlight"        => { i += 1; if let Some(v) = args.get(i) { highlight = v; } }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                match (a, b) {
+                    (Some(a), Some(b)) => exit_on(cmd_compare(a, b, output, threshold, highlight)),
+                    _ => { eprintln!("Usage: psdStudio compare <a.psd> <b.psd> [-o diff.png] [-t 10] [--highlight red|magenta|heat]"); std::process::exit(1); }
+                }
+            }
+            "sprite" => {
+                let pattern = args.get(2).map(|s| s.as_str());
+                let mut output = "sprite.png";
+                let mut layout = SpriteLayout::Horizontal;
+                let mut cols = 4u32;
+                let mut padding = 4u32;
+                let mut format = "png";
+                let mut json_out: Option<&str> = None;
+                let mut i = 3;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-o" | "--output"  => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "--layout"         => { i += 1; if let Some(v) = args.get(i) { layout = match v.as_str() { "vertical" => SpriteLayout::Vertical, "grid" => SpriteLayout::Grid, _ => SpriteLayout::Horizontal }; } }
+                        "--cols"           => { i += 1; if let Some(v) = args.get(i) { cols = v.parse().unwrap_or(4); } }
+                        "--padding"        => { i += 1; if let Some(v) = args.get(i) { padding = v.parse().unwrap_or(4); } }
+                        "-f" | "--format"  => { i += 1; if let Some(v) = args.get(i) { format = v; } }
+                        "--json"           => { i += 1; json_out = args.get(i).map(|s| s.as_str()); }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                match pattern {
+                    Some(p) => exit_on(cmd_sprite(p, output, layout, cols, padding, format, json_out)),
+                    None => { eprintln!("Usage: psdStudio sprite <\"*.psd\"> [-o sprite.png] [--layout horizontal|vertical|grid] [--cols 4] [--padding 4] [--json map.json]"); std::process::exit(1); }
+                }
+            }
+            "watch" => {
+                let dir = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+                let mut output = "./output";
+                let mut format = "png";
+                let mut debounce = 300u64;
+                let mut i = 3;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "-o" | "--output"   => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "-f" | "--format"   => { i += 1; if let Some(v) = args.get(i) { format = v; } }
+                        "--debounce"        => { i += 1; if let Some(v) = args.get(i) { debounce = v.parse().unwrap_or(300); } }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                exit_on(cmd_watch(dir, output, format, debounce));
+            }
+            // PSDファイルパスが直接渡された場合はGUIで開く（後述）
+            s if s.ends_with(".psd") || s.ends_with(".PSD") => {
+                // GUIに渡すのでここではスルー → Tauriを起動
+            }
+            _ => {
+                // 不明なサブコマンドはヘルプ表示して終了
+                eprintln!("Unknown command: {}", subcmd);
+                eprintln!("Commands: convert, batch, info, thumbnail, layers, export-layers, compare, sprite, watch");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // ② CLIに該当しなかった場合のみ Tauri GUI を起動
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -505,88 +770,14 @@ pub fn run() {
         }))
         .invoke_handler(tauri::generate_handler![greet, get_launch_args, open_default_app_settings])
         .setup(|app| {
+            // CLIプラグインはGUI起動時のオプション引数（PSDファイル直接渡し等）に使う
             match app.cli().matches() {
                 Ok(matches) => {
                     if let Some(sub) = matches.subcommand {
-                        match sub.name.as_str() {
-                            "convert" => {
-                                let i = sub.matches.args.get("input").and_then(|v| v.value.as_str());
-                                let o = sub.matches.args.get("output").and_then(|v| v.value.as_str());
-                                match (i, o) {
-                                    (Some(i), Some(o)) => exit_on(cmd_convert(i, o)),
-                                    _ => { eprintln!("Usage: psd-tool convert <input.psd> <output.png>"); std::process::exit(1); }
-                                }
+                        if sub.name == "open" {
+                            if let Some(p) = sub.matches.args.get("path").and_then(|v| v.value.as_str()) {
+                                let _ = app.emit("open-file", vec!["psdStudio".to_string(), p.to_string()]);
                             }
-                            "batch" => {
-                                let pat = sub.matches.args.get("pattern").and_then(|v| v.value.as_str());
-                                let out = sub.matches.args.get("output").and_then(|v| v.value.as_str()).unwrap_or("./output");
-                                let fmt = sub.matches.args.get("format").and_then(|v| v.value.as_str()).unwrap_or("png");
-                                let vb  = sub.matches.args.get("verbose").and_then(|v| v.value.as_bool()).unwrap_or(false);
-                                match pat { Some(p) => exit_on(cmd_batch(p, out, fmt, vb)), None => { eprintln!("Usage: psd-tool batch <\"*.psd\"> [--output DIR] [--format png|jpeg|webp] [--verbose]"); std::process::exit(1); } }
-                            }
-                            "info" => {
-                                let i = sub.matches.args.get("input").and_then(|v| v.value.as_str());
-                                let o = sub.matches.args.get("output").and_then(|v| v.value.as_str());
-                                let p = sub.matches.args.get("pretty").and_then(|v| v.value.as_bool()).unwrap_or(true);
-                                match i { Some(i) => exit_on(cmd_info(i, o, p)), None => { eprintln!("Usage: psd-tool info <input.psd> [--output info.json]"); std::process::exit(1); } }
-                            }
-                            "thumbnail" => {
-                                let i = sub.matches.args.get("input").and_then(|v| v.value.as_str());
-                                let o = sub.matches.args.get("output").and_then(|v| v.value.as_str());
-                                let s = sub.matches.args.get("size").and_then(|v| v.value.as_str()).and_then(|s| s.parse::<u32>().ok()).unwrap_or(256);
-                                match (i, o) { (Some(i), Some(o)) => exit_on(cmd_thumbnail(i, o, s)), _ => { eprintln!("Usage: psd-tool thumbnail <input.psd> <output.png> [--size 256]"); std::process::exit(1); } }
-                            }
-                            "layers" => {
-                                let i    = sub.matches.args.get("input").and_then(|v| v.value.as_str());
-                                let o    = sub.matches.args.get("output").and_then(|v| v.value.as_str()).unwrap_or("output.png");
-                                let lst  = sub.matches.args.get("list").and_then(|v| v.value.as_bool()).unwrap_or(false);
-                                let shw  = sub.matches.args.get("show").and_then(|v| v.value.as_str()).unwrap_or("");
-                                let hid  = sub.matches.args.get("hide").and_then(|v| v.value.as_str()).unwrap_or("");
-                                let show: Vec<&str> = shw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-                                let hide: Vec<&str> = hid.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-                                match i { Some(i) => exit_on(cmd_layers(i, o, &show, &hide, lst)), None => { eprintln!("Usage: psd-tool layers <input.psd> [--list] [--show \"A,B\"] [--hide \"C\"] [--output out.png]"); std::process::exit(1); } }
-                            }
-                            "export-layers" => {
-                                let i   = sub.matches.args.get("input").and_then(|v| v.value.as_str());
-                                let o   = sub.matches.args.get("output").and_then(|v| v.value.as_str()).unwrap_or("./layers");
-                                let fmt = sub.matches.args.get("format").and_then(|v| v.value.as_str()).unwrap_or("png");
-                                let vis = sub.matches.args.get("visible-only").and_then(|v| v.value.as_bool()).unwrap_or(false);
-                                let flt = sub.matches.args.get("flatten").and_then(|v| v.value.as_bool()).unwrap_or(false);
-                                match i { Some(i) => exit_on(cmd_export_layers(i, o, fmt, vis, flt)), None => { eprintln!("Usage: psd-tool export-layers <input.psd> [--output DIR] [--format png|jpeg|webp] [--visible-only] [--flatten]"); std::process::exit(1); } }
-                            }
-                            "compare" => {
-                                let a   = sub.matches.args.get("input-a").and_then(|v| v.value.as_str());
-                                let b   = sub.matches.args.get("input-b").and_then(|v| v.value.as_str());
-                                let o   = sub.matches.args.get("output").and_then(|v| v.value.as_str()).unwrap_or("diff.png");
-                                let thr = sub.matches.args.get("threshold").and_then(|v| v.value.as_str()).and_then(|s| s.parse::<u8>().ok()).unwrap_or(10);
-                                let hl  = sub.matches.args.get("highlight").and_then(|v| v.value.as_str()).unwrap_or("red");
-                                match (a, b) { (Some(a), Some(b)) => exit_on(cmd_compare(a, b, o, thr, hl)), _ => { eprintln!("Usage: psd-tool compare <a.psd> <b.psd> [--output diff.png] [--threshold 10] [--highlight red|magenta|heat]"); std::process::exit(1); } }
-                            }
-                            "sprite" => {
-                                let pat = sub.matches.args.get("pattern").and_then(|v| v.value.as_str());
-                                let o   = sub.matches.args.get("output").and_then(|v| v.value.as_str()).unwrap_or("sprite.png");
-                                let ly  = match sub.matches.args.get("layout").and_then(|v| v.value.as_str()).unwrap_or("horizontal") {
-                                    "vertical" => SpriteLayout::Vertical, "grid" => SpriteLayout::Grid, _ => SpriteLayout::Horizontal,
-                                };
-                                let cols = sub.matches.args.get("cols").and_then(|v| v.value.as_str()).and_then(|s| s.parse::<u32>().ok()).unwrap_or(4);
-                                let pad  = sub.matches.args.get("padding").and_then(|v| v.value.as_str()).and_then(|s| s.parse::<u32>().ok()).unwrap_or(4);
-                                let fmt  = sub.matches.args.get("format").and_then(|v| v.value.as_str()).unwrap_or("png");
-                                let jsn  = sub.matches.args.get("json").and_then(|v| v.value.as_str());
-                                match pat { Some(p) => exit_on(cmd_sprite(p, o, ly, cols, pad, fmt, jsn)), None => { eprintln!("Usage: psd-tool sprite <\"*.psd\"> [--output sprite.png] [--layout horizontal|vertical|grid] [--cols 4] [--padding 4] [--json map.json]"); std::process::exit(1); } }
-                            }
-                            "watch" => {
-                                let dir = sub.matches.args.get("dir").and_then(|v| v.value.as_str()).unwrap_or(".");
-                                let o   = sub.matches.args.get("output").and_then(|v| v.value.as_str()).unwrap_or("./output");
-                                let fmt = sub.matches.args.get("format").and_then(|v| v.value.as_str()).unwrap_or("png");
-                                let deb = sub.matches.args.get("debounce").and_then(|v| v.value.as_str()).and_then(|s| s.parse::<u64>().ok()).unwrap_or(300);
-                                exit_on(cmd_watch(dir, o, fmt, deb));
-                            }
-                            "open" => {
-                                if let Some(p) = sub.matches.args.get("path").and_then(|v| v.value.as_str()) {
-                                    let _ = app.emit("open-file", vec!["psd-tool".to_string(), p.to_string()]);
-                                }
-                            }
-                            _ => {}
                         }
                     }
                 }
