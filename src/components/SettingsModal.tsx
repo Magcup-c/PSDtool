@@ -442,7 +442,7 @@ export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: Settin
                         </div>
                         <div className="settings-field" style={{ marginTop: 12 }}>
                             <div className="settings-field-label">{t.about}</div>
-                            <div className="settings-field-desc">PSD Editor v0.1.0</div>
+                            <div className="settings-field-desc">psdStudio v0.1.0</div>
                         </div>
                     </div>
                 </div>

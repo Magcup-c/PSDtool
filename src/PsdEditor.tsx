@@ -118,7 +118,7 @@ async function renderPsdToBytes(psd: any): Promise<Uint8Array> {
 const PsdEditor = () => {
     const {
         psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo,
-        normalizeRadioGroups, toggleRadioLayer, resetHistory,
+        toggleRadioLayer, resetHistory,
     } = usePsdHistory(null);
 
     const { loadPsd } = usePsdWorker();

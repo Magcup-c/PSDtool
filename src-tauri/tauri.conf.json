@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "psd-tool",
+  "productName": "psdStudio",
   "version": "0.1.0",
-  "identifier": "com.masak.psd-tool",
+  "identifier": "com.masak.psd-Studio",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "PSD STUDIO",
+        "title": "psdStudio",
         "width": 1200,
         "height": 800,
         "decorations": false,
@@ -24,7 +24,7 @@
   },
   "plugins": {
     "cli": {
-      "description": "PSD Studio CLI — headless PSD processing tools",
+      "description": "psdStudio CLI — headless PSD processing tools",
       "args": [
         { "name": "input", "description": "PSD file to open (GUI mode)", "index": 1, "takesValue": true }
       ],

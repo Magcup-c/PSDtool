@@ -33,6 +33,16 @@ fn open_default_app_settings() -> Result<(), String> {
     }
 }
 
+fn handle_cli_result<T, E: std::fmt::Display>(result: Result<T, E>) {
+    match result {
+        Ok(_) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 //  Shared PSD helpers
 // ─────────────────────────────────────────────────────────────

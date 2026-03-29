@@ -54,7 +54,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
             <div className="custom-title-bar" data-tauri-drag-region>
                 <div className="title-bar-left">
                     <div className="title-bar-brand">
-                        <ImageIcon size={14} /><span>PSD STUDIO</span>
+                        <ImageIcon size={14} /><span>psdStudio</span>
                     </div>
                     <FileMenu
                         recentFiles={recentFiles}

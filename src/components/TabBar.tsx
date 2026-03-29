@@ -4,7 +4,7 @@
  * ファイルタブバー。ドラッグ&ドロップで並び替え可能。
  */
 
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import { X, Plus, FileImage } from 'lucide-react';
 import { TabState } from '../hooks/useTabManager';
 
