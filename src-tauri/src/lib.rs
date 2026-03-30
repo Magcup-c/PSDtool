@@ -3,6 +3,318 @@ use tauri_plugin_cli::CliExt;
 use std::path::Path;
 
 // ─────────────────────────────────────────────────────────────
+//  CLI Help System
+// ─────────────────────────────────────────────────────────────
+
+const VERSION: &str = "0.1.0";
+const BIN: &str = "psdStudio";
+
+/// Prints the top-level help message and exits with code 0.
+fn print_help() -> ! {
+    println!(
+r#"psdStudio v{VERSION}  —  PSD viewer & headless processing tool
+
+USAGE:
+    {BIN} [OPTIONS]
+    {BIN} <COMMAND> [ARGS...]
+    {BIN} <file.psd>              Open a PSD file in the GUI editor
+
+OPTIONS:
+    -h, --help       Show this help message
+    -V, --version    Show version information
+
+COMMANDS:
+    convert          Convert a single PSD → image file
+    batch            Batch-convert PSD files matching a glob pattern
+    info             Extract PSD metadata as JSON
+    thumbnail        Generate a thumbnail from a PSD file
+    layers           List or manipulate layer visibility
+    export-layers    Export each layer as an individual image file
+    compare          Generate a diff image highlighting changes between two PSDs
+    sprite           Combine multiple PSDs into a single sprite sheet
+    watch            Watch a directory and auto-convert PSD files on save
+
+Run '{BIN} <COMMAND> --help' for detailed usage of each command.
+
+EXAMPLES:
+    {BIN} design.psd
+    {BIN} convert design.psd output.png
+    {BIN} batch "assets/*.psd" -o ./out -f webp
+    {BIN} info design.psd
+    {BIN} watch ./src -o ./out -f png"#
+    );
+    std::process::exit(0);
+}
+
+fn print_version() -> ! {
+    println!("{BIN} {VERSION}");
+    std::process::exit(0);
+}
+
+// ── Per-command help ─────────────────────────────────────────
+
+fn help_convert() -> ! {
+    println!(
+r#"psdStudio convert — Convert a single PSD file to an image
+
+USAGE:
+    {BIN} convert <INPUT> <OUTPUT>
+
+ARGS:
+    <INPUT>     Path to the source .psd file
+    <OUTPUT>    Path to the output image file
+
+OPTIONS:
+    -h, --help  Show this help message
+
+OUTPUT FORMAT is inferred from the file extension:
+    .png          PNG  (lossless, alpha supported)
+    .jpg / .jpeg  JPEG (lossy, no alpha)
+    .webp         WebP (lossy, alpha supported)
+
+EXAMPLES:
+    {BIN} convert design.psd output.png
+    {BIN} convert design.psd preview.jpg
+    {BIN} convert design.psd compressed.webp"#
+    );
+    std::process::exit(0);
+}
+
+fn help_batch() -> ! {
+    println!(
+r#"psdStudio batch — Batch-convert PSD files matching a glob pattern
+
+USAGE:
+    {BIN} batch <PATTERN> [OPTIONS]
+
+ARGS:
+    <PATTERN>    Glob pattern for PSD files (e.g. "assets/*.psd")
+                 Quote the pattern to prevent shell expansion.
+
+OPTIONS:
+    -o, --output <DIR>     Output directory  [default: ./output]
+    -f, --format <FMT>     Output format: png | jpeg | webp  [default: png]
+    -v, --verbose          Print each converted file path
+    -h, --help             Show this help message
+
+EXAMPLES:
+    {BIN} batch "*.psd"
+    {BIN} batch "src/**/*.psd" -o ./dist -f webp -v
+    {BIN} batch "sprites/*.psd" -o ./out -f jpeg"#
+    );
+    std::process::exit(0);
+}
+
+fn help_info() -> ! {
+    println!(
+r#"psdStudio info — Extract metadata from a PSD file as JSON
+
+USAGE:
+    {BIN} info <INPUT> [OPTIONS]
+
+ARGS:
+    <INPUT>    Path to the source .psd file
+
+OPTIONS:
+    -o, --output <FILE>    Write JSON to a file instead of stdout
+    -p, --pretty           Pretty-print JSON output  [default: on]
+    -h, --help             Show this help message
+
+OUTPUT FIELDS:
+    file, width, height, layer_count, layers[]
+      layers[]: name, visible, left, top, right, bottom, width, height
+
+EXAMPLES:
+    {BIN} info design.psd
+    {BIN} info design.psd -o meta.json
+    {BIN} info design.psd | jq '.layer_count'"#
+    );
+    std::process::exit(0);
+}
+
+fn help_thumbnail() -> ! {
+    println!(
+r#"psdStudio thumbnail — Generate a thumbnail from a PSD file
+
+USAGE:
+    {BIN} thumbnail <INPUT> <OUTPUT> [OPTIONS]
+
+ARGS:
+    <INPUT>     Path to the source .psd file
+    <OUTPUT>    Path to the output thumbnail file (.png or .jpg)
+
+OPTIONS:
+    -s, --size <PX>    Max width/height in pixels (aspect preserved)  [default: 256]
+    -h, --help         Show this help message
+
+EXAMPLES:
+    {BIN} thumbnail design.psd thumb.png
+    {BIN} thumbnail design.psd thumb.jpg -s 128
+    {BIN} thumbnail design.psd preview.png -s 512"#
+    );
+    std::process::exit(0);
+}
+
+fn help_layers() -> ! {
+    println!(
+r#"psdStudio layers — List or manipulate layer visibility in a PSD
+
+USAGE:
+    {BIN} layers <INPUT> [OPTIONS]
+
+ARGS:
+    <INPUT>    Path to the source .psd file
+
+OPTIONS:
+    -l, --list              List all layers and exit (no output written)
+    --show <NAMES>          Comma-separated layer name patterns to show
+    --hide <NAMES>          Comma-separated layer name patterns to hide
+    -o, --output <FILE>     Output PNG file path  [default: output.png]
+    -h, --help              Show this help message
+
+NOTES:
+    Name matching is case-insensitive substring search.
+    --show / --hide can be combined.
+
+EXAMPLES:
+    {BIN} layers design.psd --list
+    {BIN} layers design.psd --show "Background,Shadow" -o visible.png
+    {BIN} layers design.psd --hide "Draft" --show "Final" -o result.png"#
+    );
+    std::process::exit(0);
+}
+
+fn help_export_layers() -> ! {
+    println!(
+r#"psdStudio export-layers — Export each layer as an individual image file
+
+USAGE:
+    {BIN} export-layers <INPUT> [OPTIONS]
+
+ARGS:
+    <INPUT>    Path to the source .psd file
+
+OPTIONS:
+    -o, --output <DIR>     Output directory  [default: ./layers]
+    -f, --format <FMT>     Output format: png | jpeg | webp  [default: png]
+    --visible-only         Skip hidden layers
+    --flatten              Flatten group layers before export
+    -h, --help             Show this help message
+
+NOTES:
+    Output filenames are derived from layer names.
+    Special characters are replaced with underscores.
+    Duplicate names get a numeric suffix (_1, _2, …).
+
+EXAMPLES:
+    {BIN} export-layers design.psd
+    {BIN} export-layers design.psd -o ./parts -f webp
+    {BIN} export-layers design.psd --visible-only -o ./export"#
+    );
+    std::process::exit(0);
+}
+
+fn help_compare() -> ! {
+    println!(
+r#"psdStudio compare — Diff two PSD files and generate a highlight image
+
+USAGE:
+    {BIN} compare <INPUT_A> <INPUT_B> [OPTIONS]
+
+ARGS:
+    <INPUT_A>    Path to the first .psd file
+    <INPUT_B>    Path to the second .psd file
+
+OPTIONS:
+    -o, --output <FILE>       Output diff image path  [default: diff.png]
+    -t, --threshold <0-255>   Pixel delta to count as changed  [default: 10]
+    --highlight <MODE>        Highlight color mode  [default: red]
+                              red | magenta | heat
+    -h, --help                Show this help message
+
+HIGHLIGHT MODES:
+    red       Changed pixels → solid red
+    magenta   Changed pixels → solid magenta
+    heat      Changed pixels → gradient from yellow (low) to red (high)
+
+EXAMPLES:
+    {BIN} compare v1.psd v2.psd
+    {BIN} compare v1.psd v2.psd -o changes.png -t 5
+    {BIN} compare v1.psd v2.psd --highlight heat -o heatmap.png"#
+    );
+    std::process::exit(0);
+}
+
+fn help_sprite() -> ! {
+    println!(
+r#"psdStudio sprite — Combine multiple PSDs into a single sprite sheet
+
+USAGE:
+    {BIN} sprite <PATTERN> [OPTIONS]
+
+ARGS:
+    <PATTERN>    Glob pattern for PSD files (e.g. "frames/*.psd")
+                 Files are sorted alphabetically before packing.
+
+OPTIONS:
+    -o, --output <FILE>     Output sprite sheet path  [default: sprite.png]
+    --layout <MODE>         Packing layout  [default: horizontal]
+                            horizontal | vertical | grid
+    --cols <N>              Columns for grid layout  [default: 4]
+    --padding <PX>          Padding between sprites in pixels  [default: 4]
+    -f, --format <FMT>      Output format: png | jpeg | webp  [default: png]
+    --json <FILE>           Write a JSON frame map to this file
+    -h, --help              Show this help message
+
+JSON MAP FIELDS (per frame):
+    name, x, y, width, height
+
+EXAMPLES:
+    {BIN} sprite "frames/*.psd" -o sheet.png
+    {BIN} sprite "icons/*.psd" --layout grid --cols 8 --padding 2
+    {BIN} sprite "frames/*.psd" -o sheet.png --json frames.json
+    {BIN} sprite "assets/*.psd" --layout vertical -f webp -o sheet.webp"#
+    );
+    std::process::exit(0);
+}
+
+fn help_watch() -> ! {
+    println!(
+r#"psdStudio watch — Watch a directory and auto-convert PSD files on save
+
+USAGE:
+    {BIN} watch [DIR] [OPTIONS]
+
+ARGS:
+    [DIR]    Directory to watch recursively  [default: current directory]
+
+OPTIONS:
+    -o, --output <DIR>       Output directory for converted files  [default: ./output]
+    -f, --format <FMT>       Output format: png | jpeg | webp  [default: png]
+    --debounce <MS>          Debounce delay in milliseconds  [default: 300]
+    -h, --help               Show this help message
+
+NOTES:
+    Press Ctrl+C to stop watching.
+    Output filenames mirror the input PSD stem (e.g. design.psd → design.png).
+    Multiple rapid saves are coalesced using the debounce window.
+
+EXAMPLES:
+    {BIN} watch
+    {BIN} watch ./src -o ./dist -f webp
+    {BIN} watch ./assets -o ./out --debounce 500"#
+    );
+    std::process::exit(0);
+}
+
+// ── Argument helpers ─────────────────────────────────────────
+
+/// Returns true if any arg in `args` is `-h` or `--help`.
+fn wants_help(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-h" || a == "--help")
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Tauri invoke commands
 // ─────────────────────────────────────────────────────────────
 
@@ -43,13 +355,10 @@ fn is_launched_from_explorer() -> bool {
     use windows::Win32::Foundation::CloseHandle;
 
     unsafe {
-        // コンソールウィンドウが存在しない = windows_subsystem="windows"ビルド
-        // 存在する場合、親プロセス名で判断
         if GetConsoleWindow().0 == 0 {
             return true;
         }
 
-        // 親プロセスIDを取得
         let snapshot = windows::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot(
             windows::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPPROCESS,
             0,
@@ -78,7 +387,6 @@ fn is_launched_from_explorer() -> bool {
 
         if parent_pid == 0 { return false; }
 
-        // 親プロセスの実行ファイル名を取得
         let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, parent_pid) else {
             return false;
         };
@@ -90,8 +398,6 @@ fn is_launched_from_explorer() -> bool {
 
         let name = String::from_utf16_lossy(&buf[..len as usize]);
         let lower = name.to_lowercase();
-
-        // explorer.exe から起動された場合のみGUIモード扱い
         lower.ends_with("explorer.exe")
     }
 }
@@ -165,7 +471,7 @@ fn exit_on(result: Result<(), String>) -> ! {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  convert  (single PSD → image)
+//  convert
 // ─────────────────────────────────────────────────────────────
 
 fn cmd_convert(input: &str, output: &str) -> Result<(), String> {
@@ -177,7 +483,7 @@ fn cmd_convert(input: &str, output: &str) -> Result<(), String> {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  batch  (glob pattern → output directory)
+//  batch
 // ─────────────────────────────────────────────────────────────
 
 fn cmd_batch(pattern: &str, output_dir: &str, format: &str, verbose: bool) -> Result<(), String> {
@@ -215,7 +521,7 @@ fn cmd_batch(pattern: &str, output_dir: &str, format: &str, verbose: bool) -> Re
 }
 
 // ─────────────────────────────────────────────────────────────
-//  info  (PSD metadata → JSON)
+//  info
 // ─────────────────────────────────────────────────────────────
 
 fn cmd_info(input: &str, output: Option<&str>, pretty: bool) -> Result<(), String> {
@@ -267,7 +573,7 @@ fn cmd_thumbnail(input: &str, output: &str, size: u32) -> Result<(), String> {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  layers  (list / show / hide)
+//  layers
 // ─────────────────────────────────────────────────────────────
 
 fn name_matches(name: &str, pattern: &str) -> bool {
@@ -305,7 +611,7 @@ fn cmd_layers(input: &str, output: &str, show: &[&str], hide: &[&str], list_only
 }
 
 // ─────────────────────────────────────────────────────────────
-//  export-layers  (each layer → individual file)
+//  export-layers
 // ─────────────────────────────────────────────────────────────
 
 fn sanitize_name(name: &str) -> String {
@@ -325,7 +631,7 @@ fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_only: 
     println!("Exporting layers from '{}' → '{}'\n", input, output_dir);
 
     for layer in psd.layers() {
-        let name      = sanitize_name(layer.name());
+        let name = sanitize_name(layer.name());
 
         if visible_only && !layer.visible() { skipped += 1; continue; }
 
@@ -355,7 +661,7 @@ fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_only: 
 }
 
 // ─────────────────────────────────────────────────────────────
-//  compare  (diff two PSD composites → highlighted diff image)
+//  compare
 // ─────────────────────────────────────────────────────────────
 
 fn cmd_compare(input_a: &str, input_b: &str, output: &str, threshold: u8, highlight: &str) -> Result<(), String> {
@@ -403,7 +709,7 @@ fn cmd_compare(input_a: &str, input_b: &str, output: &str, threshold: u8, highli
 }
 
 // ─────────────────────────────────────────────────────────────
-//  sprite  (multiple PSDs → sprite sheet + JSON map)
+//  sprite
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq)]
@@ -479,7 +785,7 @@ fn cmd_sprite(pattern: &str, output: &str, layout: SpriteLayout, cols: u32, padd
 }
 
 // ─────────────────────────────────────────────────────────────
-//  watch  (directory watcher → auto-convert on save)
+//  watch
 // ─────────────────────────────────────────────────────────────
 
 fn cmd_watch(watch_dir: &str, output_dir: &str, format: &str, debounce_ms: u64) -> Result<(), String> {
@@ -543,12 +849,171 @@ fn cmd_watch(watch_dir: &str, output_dir: &str, format: &str, debounce_ms: u64) 
 }
 
 // ─────────────────────────────────────────────────────────────
+//  GUI invoke commands — CLIコマンドをTauriコマンドとして公開
+// ─────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct BatchResult {
+    pub ok: usize,
+    pub err: usize,
+    pub total: usize,
+    pub errors: Vec<String>,
+}
+
+#[tauri::command]
+fn run_batch(pattern: String, output_dir: String, format: String) -> Result<BatchResult, String> {
+    let paths: Vec<_> = glob::glob(&pattern)
+        .map_err(|e| format!("Invalid glob pattern '{}': {}", pattern, e))?
+        .filter_map(|e| e.ok())
+        .filter(|p| p.extension().map(|ext| ext.eq_ignore_ascii_case("psd")).unwrap_or(false))
+        .collect();
+
+    if paths.is_empty() {
+        return Ok(BatchResult { ok: 0, err: 0, total: 0, errors: vec![] });
+    }
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| format!("Failed to create output dir '{}': {}", output_dir, e))?;
+
+    let (mut ok, mut err) = (0usize, 0usize);
+    let mut errors = Vec::new();
+    for path in &paths {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let out_path = std::path::Path::new(&output_dir).join(format!("{}.{}", stem, image_ext(&format)));
+        let out_str = out_path.to_string_lossy().into_owned();
+        match (|| -> Result<(), String> {
+            let psd   = load_psd(path.to_string_lossy().as_ref())?;
+            let img   = psd_to_rgba_image(&psd)?;
+            let bytes = encode_image_rgba(&img, &format)?;
+            save_bytes(&out_str, &bytes)
+        })() {
+            Ok(_)  => { ok += 1; }
+            Err(e) => { err += 1; errors.push(format!("{}: {}", stem, e)); }
+        }
+    }
+    Ok(BatchResult { ok, err, total: paths.len(), errors })
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct ExportLayersResult {
+    pub count: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+#[tauri::command]
+fn run_export_layers(input: String, output_dir: String, format: String, visible_only: bool) -> Result<ExportLayersResult, String> {
+    let psd = load_psd(&input)?;
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| format!("Failed to create output dir: {}", e))?;
+
+    let ext = image_ext(&format);
+    let (mut count, mut skipped) = (0usize, 0usize);
+    let mut errors = Vec::new();
+
+    for layer in psd.layers() {
+        if visible_only && !layer.visible() { skipped += 1; continue; }
+        let name = sanitize_name(layer.name());
+        let pixel_data: Vec<u8> = layer.rgba();
+        let (w, h) = (layer.width() as u32, layer.height() as u32);
+        if w == 0 || h == 0 { skipped += 1; continue; }
+        let img = match image::RgbaImage::from_raw(w, h, pixel_data) {
+            Some(i) => i,
+            None    => { skipped += 1; continue; }
+        };
+        let mut out_path = std::path::Path::new(&output_dir).join(format!("{}.{}", name, ext));
+        let mut idx = 1u32;
+        while out_path.exists() {
+            out_path = std::path::Path::new(&output_dir).join(format!("{}_{}.{}", name, idx, ext));
+            idx += 1;
+        }
+        match encode_image_rgba(&img, &format).and_then(|b| save_bytes(&out_path.to_string_lossy(), &b)) {
+            Ok(_)  => count += 1,
+            Err(e) => { errors.push(format!("{}: {}", name, e)); }
+        }
+    }
+    Ok(ExportLayersResult { count, skipped, errors })
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct CompareResult {
+    pub changed_px: u64,
+    pub total_px: u64,
+    pub changed_pct: f64,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[tauri::command]
+fn run_compare(input_a: String, input_b: String, output: String, threshold: u8, highlight: String) -> Result<CompareResult, String> {
+    let img_a = psd_to_rgba_image(&load_psd(&input_a)?)?;
+    let img_b = psd_to_rgba_image(&load_psd(&input_b)?)?;
+    let (wa, ha) = img_a.dimensions();
+    let (wb, hb) = img_b.dimensions();
+    let (w, h) = (wa.max(wb), ha.max(hb));
+
+    let mut diff = image::RgbaImage::new(w, h);
+    let mut changed = 0u64;
+
+    for y in 0..h {
+        for x in 0..w {
+            let pa = if x < wa && y < ha { *img_a.get_pixel(x, y) } else { image::Rgba([0,0,0,0]) };
+            let pb = if x < wb && y < hb { *img_b.get_pixel(x, y) } else { image::Rgba([0,0,0,0]) };
+            let delta = (0..4).map(|i| (pa[i] as i32 - pb[i] as i32).unsigned_abs() as u8).max().unwrap_or(0);
+            if delta > threshold {
+                changed += 1;
+                let pixel = match highlight.as_str() {
+                    "magenta" => image::Rgba([255, 0, 255, 255]),
+                    "heat" => {
+                        let t = (delta as f32 / 255.0).clamp(0.0, 1.0);
+                        image::Rgba([(255.0 * t) as u8, (255.0 * (1.0 - t * 0.8)) as u8, 0, 255])
+                    }
+                    _ => image::Rgba([255, 0, 0, 255]),
+                };
+                diff.put_pixel(x, y, pixel);
+            } else {
+                let r = ((pa[0] as u16 + pb[0] as u16) / 2) as u8 / 2;
+                let g = ((pa[1] as u16 + pb[1] as u16) / 2) as u8 / 2;
+                let b = ((pa[2] as u16 + pb[2] as u16) / 2) as u8 / 2;
+                diff.put_pixel(x, y, image::Rgba([r, g, b, 200]));
+            }
+        }
+    }
+    let pct = changed as f64 / (w * h) as f64 * 100.0;
+    save_bytes(&output, &encode_image_rgba(&diff, "png")?)?;
+    Ok(CompareResult { changed_px: changed, total_px: (w * h) as u64, changed_pct: pct, width: w, height: h })
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct SpriteResult {
+    pub width: u32,
+    pub height: u32,
+    pub frame_count: usize,
+}
+
+#[tauri::command]
+fn run_sprite(pattern: String, output: String, layout: String, cols: u32, padding: u32, format: String, json_out: Option<String>) -> Result<SpriteResult, String> {
+    let sprite_layout = match layout.as_str() {
+        "vertical" => SpriteLayout::Vertical,
+        "grid"     => SpriteLayout::Grid,
+        _          => SpriteLayout::Horizontal,
+    };
+    cmd_sprite(&pattern, &output, sprite_layout, cols, padding, &format, json_out.as_deref())?;
+
+    // サイズを返すためにPSDを再読みする代わりに出力画像から取得
+    let meta = image::image_dimensions(&output)
+        .unwrap_or((0, 0));
+    let n = glob::glob(&pattern)
+        .map(|g| g.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    Ok(SpriteResult { width: meta.0, height: meta.1, frame_count: n })
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Tauri app entry point
 // ─────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-        // Windowsでコンソール窓を非表示にする（CLIモード以外の場合）
     #[cfg(target_os = "windows")]
     {
         let args: Vec<String> = std::env::args().collect();
@@ -559,7 +1024,6 @@ pub fn run() {
             )
         }).unwrap_or(false);
 
-        // CLIコマンド指定なし かつ エクスプローラーから起動 → コンソールを切り離す
         if !is_cli && is_launched_from_explorer() {
             unsafe {
                 windows::Win32::System::Console::FreeConsole();
@@ -567,21 +1031,40 @@ pub fn run() {
         }
     }
 
-    // 以降は既存のCLI判定・Tauri起動処理...
-
-    // ① Tauri を起動する前に引数を見てCLIか判定
     let args: Vec<String> = std::env::args().collect();
-    
+
+    // ── Global flags: --help / -h / --version / -V ──────────
+    if let Some(flag) = args.get(1).map(|s| s.as_str()) {
+        match flag {
+            "-h" | "--help"    => print_help(),
+            "-V" | "--version" => print_version(),
+            _ => {}
+        }
+    }
+    // No arguments at all → launch GUI
+    if args.len() == 1 {
+        // fall through to Tauri below
+    }
+
+    // ── Subcommand dispatch ───────────────────────────────────
     if let Some(subcmd) = args.get(1).map(|s| s.as_str()) {
         match subcmd {
+
             "convert" => {
+                if wants_help(&args[2..]) { help_convert(); }
                 match (args.get(2), args.get(3)) {
                     (Some(i), Some(o)) => exit_on(cmd_convert(i, o)),
-                    _ => { eprintln!("Usage: psdStudio convert <input.psd> <output.png>"); std::process::exit(1); }
+                    _ => {
+                        eprintln!("Error: Missing arguments.\n");
+                        eprintln!("Usage: {BIN} convert <INPUT> <OUTPUT>");
+                        eprintln!("       {BIN} convert --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "batch" => {
-                // args から自前でパース
+                if wants_help(&args[2..]) { help_batch(); }
                 let pattern = args.get(2).map(|s| s.as_str());
                 let mut output = "./output";
                 let mut format = "png";
@@ -598,10 +1081,17 @@ pub fn run() {
                 }
                 match pattern {
                     Some(p) => exit_on(cmd_batch(p, output, format, verbose)),
-                    None => { eprintln!("Usage: psdStudio batch <\"*.psd\"> [-o DIR] [-f png|jpeg|webp] [-v]"); std::process::exit(1); }
+                    None => {
+                        eprintln!("Error: Missing glob pattern.\n");
+                        eprintln!("Usage: {BIN} batch <PATTERN> [OPTIONS]");
+                        eprintln!("       {BIN} batch --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "info" => {
+                if wants_help(&args[2..]) { help_info(); }
                 let input = args.get(2).map(|s| s.as_str());
                 let mut output: Option<&str> = None;
                 let mut pretty = true;
@@ -616,10 +1106,17 @@ pub fn run() {
                 }
                 match input {
                     Some(inp) => exit_on(cmd_info(inp, output, pretty)),
-                    None => { eprintln!("Usage: psdStudio info <input.psd> [-o out.json]"); std::process::exit(1); }
+                    None => {
+                        eprintln!("Error: Missing input file.\n");
+                        eprintln!("Usage: {BIN} info <INPUT> [OPTIONS]");
+                        eprintln!("       {BIN} info --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "thumbnail" => {
+                if wants_help(&args[2..]) { help_thumbnail(); }
                 let input  = args.get(2).map(|s| s.as_str());
                 let output = args.get(3).map(|s| s.as_str());
                 let mut size = 256u32;
@@ -632,11 +1129,18 @@ pub fn run() {
                     i += 1;
                 }
                 match (input, output) {
-                    (Some(i), Some(o)) => exit_on(cmd_thumbnail(i, o, size)),
-                    _ => { eprintln!("Usage: psdStudio thumbnail <input.psd> <output.png> [-s 256]"); std::process::exit(1); }
+                    (Some(inp), Some(out)) => exit_on(cmd_thumbnail(inp, out, size)),
+                    _ => {
+                        eprintln!("Error: Missing arguments.\n");
+                        eprintln!("Usage: {BIN} thumbnail <INPUT> <OUTPUT> [OPTIONS]");
+                        eprintln!("       {BIN} thumbnail --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "layers" => {
+                if wants_help(&args[2..]) { help_layers(); }
                 let input = args.get(2).map(|s| s.as_str());
                 let mut output = "output.png";
                 let mut list_only = false;
@@ -657,10 +1161,17 @@ pub fn run() {
                 let hide: Vec<&str> = hide_pat.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
                 match input {
                     Some(inp) => exit_on(cmd_layers(inp, output, &show, &hide, list_only)),
-                    None => { eprintln!("Usage: psdStudio layers <input.psd> [--list] [--show A,B] [--hide C] [-o out.png]"); std::process::exit(1); }
+                    None => {
+                        eprintln!("Error: Missing input file.\n");
+                        eprintln!("Usage: {BIN} layers <INPUT> [OPTIONS]");
+                        eprintln!("       {BIN} layers --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "export-layers" => {
+                if wants_help(&args[2..]) { help_export_layers(); }
                 let input = args.get(2).map(|s| s.as_str());
                 let mut output = "./layers";
                 let mut format = "png";
@@ -669,20 +1180,27 @@ pub fn run() {
                 let mut i = 3;
                 while i < args.len() {
                     match args[i].as_str() {
-                        "-o" | "--output"       => { i += 1; if let Some(v) = args.get(i) { output = v; } }
-                        "-f" | "--format"       => { i += 1; if let Some(v) = args.get(i) { format = v; } }
-                        "--visible-only"        => { visible_only = true; }
-                        "--flatten"             => { flatten = true; }
+                        "-o" | "--output" => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "-f" | "--format" => { i += 1; if let Some(v) = args.get(i) { format = v; } }
+                        "--visible-only"  => { visible_only = true; }
+                        "--flatten"       => { flatten = true; }
                         _ => {}
                     }
                     i += 1;
                 }
                 match input {
                     Some(inp) => exit_on(cmd_export_layers(inp, output, format, visible_only, flatten)),
-                    None => { eprintln!("Usage: psdStudio export-layers <input.psd> [-o DIR] [-f png|jpeg|webp] [--visible-only] [--flatten]"); std::process::exit(1); }
+                    None => {
+                        eprintln!("Error: Missing input file.\n");
+                        eprintln!("Usage: {BIN} export-layers <INPUT> [OPTIONS]");
+                        eprintln!("       {BIN} export-layers --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "compare" => {
+                if wants_help(&args[2..]) { help_compare(); }
                 let a = args.get(2).map(|s| s.as_str());
                 let b = args.get(3).map(|s| s.as_str());
                 let mut output = "diff.png";
@@ -700,10 +1218,17 @@ pub fn run() {
                 }
                 match (a, b) {
                     (Some(a), Some(b)) => exit_on(cmd_compare(a, b, output, threshold, highlight)),
-                    _ => { eprintln!("Usage: psdStudio compare <a.psd> <b.psd> [-o diff.png] [-t 10] [--highlight red|magenta|heat]"); std::process::exit(1); }
+                    _ => {
+                        eprintln!("Error: Missing arguments.\n");
+                        eprintln!("Usage: {BIN} compare <INPUT_A> <INPUT_B> [OPTIONS]");
+                        eprintln!("       {BIN} compare --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "sprite" => {
+                if wants_help(&args[2..]) { help_sprite(); }
                 let pattern = args.get(2).map(|s| s.as_str());
                 let mut output = "sprite.png";
                 let mut layout = SpriteLayout::Horizontal;
@@ -714,22 +1239,29 @@ pub fn run() {
                 let mut i = 3;
                 while i < args.len() {
                     match args[i].as_str() {
-                        "-o" | "--output"  => { i += 1; if let Some(v) = args.get(i) { output = v; } }
-                        "--layout"         => { i += 1; if let Some(v) = args.get(i) { layout = match v.as_str() { "vertical" => SpriteLayout::Vertical, "grid" => SpriteLayout::Grid, _ => SpriteLayout::Horizontal }; } }
-                        "--cols"           => { i += 1; if let Some(v) = args.get(i) { cols = v.parse().unwrap_or(4); } }
-                        "--padding"        => { i += 1; if let Some(v) = args.get(i) { padding = v.parse().unwrap_or(4); } }
-                        "-f" | "--format"  => { i += 1; if let Some(v) = args.get(i) { format = v; } }
-                        "--json"           => { i += 1; json_out = args.get(i).map(|s| s.as_str()); }
+                        "-o" | "--output" => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "--layout"        => { i += 1; if let Some(v) = args.get(i) { layout = match v.as_str() { "vertical" => SpriteLayout::Vertical, "grid" => SpriteLayout::Grid, _ => SpriteLayout::Horizontal }; } }
+                        "--cols"          => { i += 1; if let Some(v) = args.get(i) { cols = v.parse().unwrap_or(4); } }
+                        "--padding"       => { i += 1; if let Some(v) = args.get(i) { padding = v.parse().unwrap_or(4); } }
+                        "-f" | "--format" => { i += 1; if let Some(v) = args.get(i) { format = v; } }
+                        "--json"          => { i += 1; json_out = args.get(i).map(|s| s.as_str()); }
                         _ => {}
                     }
                     i += 1;
                 }
                 match pattern {
                     Some(p) => exit_on(cmd_sprite(p, output, layout, cols, padding, format, json_out)),
-                    None => { eprintln!("Usage: psdStudio sprite <\"*.psd\"> [-o sprite.png] [--layout horizontal|vertical|grid] [--cols 4] [--padding 4] [--json map.json]"); std::process::exit(1); }
+                    None => {
+                        eprintln!("Error: Missing glob pattern.\n");
+                        eprintln!("Usage: {BIN} sprite <PATTERN> [OPTIONS]");
+                        eprintln!("       {BIN} sprite --help");
+                        std::process::exit(1);
+                    }
                 }
             }
+
             "watch" => {
+                if wants_help(&args[2..]) { help_watch(); }
                 let dir = args.get(2).map(|s| s.as_str()).unwrap_or(".");
                 let mut output = "./output";
                 let mut format = "png";
@@ -737,29 +1269,30 @@ pub fn run() {
                 let mut i = 3;
                 while i < args.len() {
                     match args[i].as_str() {
-                        "-o" | "--output"   => { i += 1; if let Some(v) = args.get(i) { output = v; } }
-                        "-f" | "--format"   => { i += 1; if let Some(v) = args.get(i) { format = v; } }
-                        "--debounce"        => { i += 1; if let Some(v) = args.get(i) { debounce = v.parse().unwrap_or(300); } }
+                        "-o" | "--output" => { i += 1; if let Some(v) = args.get(i) { output = v; } }
+                        "-f" | "--format" => { i += 1; if let Some(v) = args.get(i) { format = v; } }
+                        "--debounce"      => { i += 1; if let Some(v) = args.get(i) { debounce = v.parse().unwrap_or(300); } }
                         _ => {}
                     }
                     i += 1;
                 }
                 exit_on(cmd_watch(dir, output, format, debounce));
             }
-            // PSDファイルパスが直接渡された場合はGUIで開く（後述）
+
+            // PSD file path passed directly → GUI opens it
             s if s.ends_with(".psd") || s.ends_with(".PSD") => {
-                // GUIに渡すのでここではスルー → Tauriを起動
+                // fall through to Tauri GUI
             }
+
             _ => {
-                // 不明なサブコマンドはヘルプ表示して終了
-                eprintln!("Unknown command: {}", subcmd);
-                eprintln!("Commands: convert, batch, info, thumbnail, layers, export-layers, compare, sprite, watch");
+                eprintln!("Error: Unknown command '{}'.\n", subcmd);
+                eprintln!("Run '{BIN} --help' to see available commands.");
                 std::process::exit(1);
             }
         }
     }
 
-    // ② CLIに該当しなかった場合のみ Tauri GUI を起動
+    // ── Tauri GUI ────────────────────────────────────────────
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -768,9 +1301,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             let _ = app.emit("open-file", args);
         }))
-        .invoke_handler(tauri::generate_handler![greet, get_launch_args, open_default_app_settings])
+        .invoke_handler(tauri::generate_handler![greet, get_launch_args, open_default_app_settings,run_batch, run_export_layers, run_compare, run_sprite,])
         .setup(|app| {
-            // CLIプラグインはGUI起動時のオプション引数（PSDファイル直接渡し等）に使う
             match app.cli().matches() {
                 Ok(matches) => {
                     if let Some(sub) = matches.subcommand {

@@ -2728,3 +2728,277 @@ canvas {
     background: var(--active);
     color: var(--accent);
 }
+
+/* =============================================================================
+   TOOL MODALS  (PsdEditor.css 末尾に追記)
+   Batch変換 / Export Layers / Compare / Sprite Sheet で共有するスタイル
+============================================================================= */
+
+.tool-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 5100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: settingsFadeIn 0.15s ease;
+}
+
+.tool-modal {
+    background: var(--bg-panel);
+    border: 1px solid var(--line-mid);
+    border-radius: 6px;
+    width: 440px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: settingsSlideIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.tool-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 11px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.tool-modal-title {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-2);
+}
+
+.tool-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.tool-modal-body::-webkit-scrollbar { width: 2px; }
+.tool-modal-body::-webkit-scrollbar-thumb { background: var(--line-mid); border-radius: 99px; }
+
+.tool-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+/* フィールド */
+.tool-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tool-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--fg-2);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tool-label-sub {
+    font-size: 10px;
+    font-weight: 300;
+    color: var(--fg-3);
+}
+
+/* パス行 */
+.tool-path-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 5px 8px;
+    min-height: 32px;
+}
+
+.tool-path-value {
+    flex: 1;
+    min-width: 0;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--fg-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tool-pick-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: transparent;
+    border: 1px solid var(--line-mid);
+    border-radius: 3px;
+    color: var(--fg-2);
+    font-size: 11px;
+    cursor: pointer;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: background var(--t), color var(--t);
+}
+
+.tool-pick-btn:hover:not(:disabled) {
+    background: var(--hover);
+    color: var(--fg);
+}
+
+.tool-pick-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+/* バッジ（「現在のファイル」など） */
+.tool-badge {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    padding: 1px 5px;
+    background: var(--accent-sub);
+    color: var(--accent);
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+/* フォーマット選択行 */
+.tool-format-row {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+/* スライダー行 */
+.tool-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tool-slider-value {
+    min-width: 36px;
+    text-align: right;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--fg-2);
+    flex-shrink: 0;
+}
+
+/* チェックボックス行 */
+.tool-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--fg-2);
+}
+
+.tool-checkbox-row input[type="checkbox"] {
+    width: 13px;
+    height: 13px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* エラー */
+.tool-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+    background: rgba(220, 60, 60, 0.08);
+    border: 1px solid rgba(220, 60, 60, 0.25);
+    border-radius: var(--r);
+    font-size: 11px;
+    color: #e05555;
+    line-height: 1.5;
+}
+
+/* 結果 */
+.tool-result {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--r);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+    animation: loadingFadeIn 0.2s ease;
+}
+
+.tool-result.success {
+    background: var(--active);
+    border: 1px solid rgba(from var(--accent) r g b / 0.3);
+    color: var(--fg);
+}
+
+.tool-result.success svg { color: var(--accent); flex-shrink: 0; }
+
+.tool-result.warn {
+    background: rgba(249, 115, 22, 0.08);
+    border: 1px solid rgba(249, 115, 22, 0.25);
+    color: var(--fg);
+}
+
+.tool-result.warn svg { color: #f97316; flex-shrink: 0; }
+
+.tool-result-sub {
+    font-size: 10px;
+    color: var(--fg-3);
+    margin-top: 2px;
+}
+
+.tool-error-summary {
+    font-size: 10px;
+    color: var(--fg-3);
+    cursor: pointer;
+    user-select: none;
+}
+
+.tool-error-list {
+    list-style: none;
+    margin-top: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 80px;
+    overflow-y: auto;
+}
+
+.tool-error-list li {
+    font-size: 10px;
+    font-family: 'DM Mono', monospace;
+    color: var(--fg-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

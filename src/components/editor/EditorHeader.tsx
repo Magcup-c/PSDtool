@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { FileMenu } from '../FileMenu';
+import { ToolsMenu } from '../ToolsMenu';   // ← 追加
 import { Psd } from 'ag-psd';
 import { RecentFile } from '../../hooks/useRecentFiles';
 
@@ -16,6 +17,7 @@ interface EditorHeaderProps {
     loadPsdFromFilePath: (path: string) => void;
     clearRecentFiles: () => void;
     language: 'ja' | 'en';
+    currentFilePath: string | null;   // ← 追加
     flipX: boolean;
     setFlipX: React.Dispatch<React.SetStateAction<boolean>>;
     flipY: boolean;
@@ -37,11 +39,12 @@ interface EditorHeaderProps {
     setZoomInputActive: (val: boolean) => void;
     exportButtonLabel: string;
     exportAriaLabel: string;
-    L: any; // Translation object
+    L: any;
 }
 
 export const EditorHeader: React.FC<EditorHeaderProps> = ({
     psd, recentFiles, handleOpenFile, loadPsdFromFilePath, clearRecentFiles, language,
+    currentFilePath,   // ← 追加
     flipX, setFlipX, flipY, setFlipY, handleZoom, zoomInputActive, zoomInputRef,
     zoomInputValue, setZoomInputValue, handleZoomInputCommit, handleZoomInputFocus,
     zoom, resetZoom, handleToggleFullscreen, isFullscreen, setShowSettings,
@@ -56,11 +59,17 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
                     <div className="title-bar-brand">
                         <ImageIcon size={14} /><span>psdStudio</span>
                     </div>
+                    {/* File メニュー */}
                     <FileMenu
                         recentFiles={recentFiles}
                         onOpen={handleOpenFile}
                         onOpenRecent={loadPsdFromFilePath}
                         onClearRecent={clearRecentFiles}
+                        language={language}
+                    />
+                    {/* Tools メニュー ← ここに追加 */}
+                    <ToolsMenu
+                        currentFilePath={currentFilePath}
                         language={language}
                     />
                 </div>
