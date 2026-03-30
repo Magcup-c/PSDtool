@@ -967,6 +967,7 @@ const PsdEditor = () => {
                 isFullscreen={isFullscreen} setShowSettings={setShowSettings}
                 handleExportPng={handleExportPng} handleSaveFile={handleSaveFile}
                 setZoomInputActive={setZoomInputActive} L={L}
+                currentFilePath={currentFilePath}
                 exportButtonLabel={exportButtonLabel}
                 exportAriaLabel={exportAriaLabel}
             />
