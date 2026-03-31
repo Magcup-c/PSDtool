@@ -209,6 +209,8 @@ const PsdEditor = () => {
         await appWindow.setFullscreen(next);
         setIsFullscreen(next);
     }, [appWindow, isFullscreen]);
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+    const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
     const [zoomInputActive, setZoomInputActive] = useState(false);
     const [zoomInputValue, setZoomInputValue]   = useState('');
@@ -314,6 +316,14 @@ const PsdEditor = () => {
         closeTab: lang === 'ja' ? 'タブを閉じる' : 'Close tab',
         exportAllFavDone: (n: number) =>
             lang === 'ja' ? `${n} 件のPNGを書き出しました` : `Exported ${n} PNG file(s)`,
+        copyToClipboard: lang === 'ja' ? 'クリップボードにコピー' : 'Copy to clipboard',
+        enterFullscreen: lang === 'ja' ? '全画面表示' : 'Enter fullscreen',
+        exitFullscreen: lang === 'ja' ? '全画面を終了' : 'Exit fullscreen',
+        theme: lang === 'ja' ? 'テーマ' : 'Theme',
+        themeBlack: 'Black',
+        themeGrey: 'Grey',
+        themeLight: 'Light',
+        themeWhite: 'White',
     }), [lang]);
 
     const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
@@ -962,10 +972,42 @@ const PsdEditor = () => {
         updateSettings({ theme });
     }, [updateSettings]);
 
+    // ── Context Menu ──────────────────────────────────────────────────────────
+
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+        e.preventDefault();
+        const MENU_W = 220;
+        const MENU_H = 240;
+        const x = Math.max(8, Math.min(e.clientX, window.innerWidth  - MENU_W - 8));
+        const y = Math.max(8, Math.min(e.clientY, window.innerHeight - MENU_H - 8));
+        setContextMenu({ x, y });
+    }, []);
+
+    useEffect(() => {
+        if (!contextMenu) return;
+        const onMouseDown = () => setContextMenu(null);
+        const onKeyDown = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setContextMenu(null); };
+        window.addEventListener('mousedown', onMouseDown);
+        window.addEventListener('scroll', onMouseDown, true);
+        window.addEventListener('blur', onMouseDown);
+        window.addEventListener('keydown', onKeyDown);
+        return () => {
+            window.removeEventListener('mousedown', onMouseDown);
+            window.removeEventListener('scroll', onMouseDown, true);
+            window.removeEventListener('blur', onMouseDown);
+            window.removeEventListener('keydown', onKeyDown);
+        };
+    }, [contextMenu]);
+
     // ── Render ────────────────────────────────────────────────────────────────
 
     return (
-        <div className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}>
+        <div
+            className={`psd-editor theme-${settings.theme} ${isDragging ? 'is-dragging' : ''}`}
+            onContextMenu={handleContextMenu}
+        >
             <EditorHeader
                 psd={psd} recentFiles={recentFiles} handleOpenFile={handleOpenFile}
                 loadPsdFromFilePath={openPsdUnified} clearRecentFiles={clearRecentFiles}
@@ -1056,6 +1098,46 @@ const PsdEditor = () => {
                     setFavoriteDialog={setFavoriteDialog}
                     L={L}
                 />
+            )}
+
+            {contextMenu && (
+                <div
+                    className="context-menu"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onMouseDown={e => e.stopPropagation()}
+                    onContextMenu={e => e.preventDefault()}
+                    role="menu"
+                >
+                    <button
+                        className="context-menu-item"
+                        onClick={() => { handleCopyCanvas(); closeContextMenu(); }}
+                    >
+                        {L.copyToClipboard}
+                    </button>
+                    <button
+                        className="context-menu-item"
+                        onClick={() => { handleToggleFullscreen(); closeContextMenu(); }}
+                    >
+                        {isFullscreen ? L.exitFullscreen : L.enterFullscreen}
+                    </button>
+                    <div className="context-menu-sep" />
+                    <div className="context-menu-label">{L.theme}</div>
+                    {([
+                        { key: 'black', label: L.themeBlack },
+                        { key: 'grey',  label: L.themeGrey },
+                        { key: 'light', label: L.themeLight },
+                        { key: 'white', label: L.themeWhite },
+                    ] as { key: AppSettings['theme']; label: string }[]).map(th => (
+                        <button
+                            key={th.key}
+                            className={`context-menu-item ${settings.theme === th.key ? 'active' : ''}`}
+                            onClick={() => { updateSettings({ theme: th.key }); closeContextMenu(); }}
+                        >
+                            <span className="context-menu-check">{settings.theme === th.key ? 'x' : ''}</span>
+                            <span>{th.label}</span>
+                        </button>
+                    ))}
+                </div>
             )}
         </div>
     );

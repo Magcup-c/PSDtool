@@ -1838,6 +1838,72 @@ canvas {
     to   { opacity: 1; transform: translateY(0); }
 }
 
+/* =============================================================================
+   CONTEXT MENU
+============================================================================= */
+
+.context-menu {
+    position: fixed;
+    min-width: 200px;
+    background: var(--bg-surface);
+    border: 1px solid var(--line-mid);
+    border-radius: 6px;
+    padding: 4px;
+    z-index: 9500;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+    animation: fileMenuIn 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+    user-select: none;
+}
+
+.context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--fg);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 300;
+    text-align: left;
+    cursor: default;
+    transition: background var(--t), color var(--t);
+}
+
+.context-menu-item:hover {
+    background: var(--accent-sub);
+    color: var(--fg);
+}
+
+.context-menu-item.active {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.context-menu-check {
+    width: 12px;
+    text-align: center;
+    color: var(--fg-2);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+}
+
+.context-menu-sep {
+    height: 1px;
+    background: var(--line);
+    margin: 4px 0;
+}
+
+.context-menu-label {
+    padding: 4px 8px 2px;
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 /* ショートカット一覧 */
 .shortcut-list {
     display: flex;
