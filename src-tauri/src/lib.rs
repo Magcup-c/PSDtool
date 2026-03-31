@@ -1026,7 +1026,7 @@ pub fn run() {
 
         if !is_cli && is_launched_from_explorer() {
             unsafe {
-                windows::Win32::System::Console::FreeConsole();
+                let _ = windows::Win32::System::Console::FreeConsole();
             }
         }
     }
