@@ -19,6 +19,9 @@ export function usePsdHistory(initialPsd: Psd | null) {
         if (!current) return;
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), current];
         redoStack.current = [];
+        // [FIX #3] psdRef を先に更新してから setState することで、
+        // commitPsd 連鎖呼び出し時に psdRef が古い値を指すのを防ぐ
+        psdRef.current = next;
         setPsd(next);
     }, []);
 
@@ -31,14 +34,18 @@ export function usePsdHistory(initialPsd: Psd | null) {
         if (!undoStack.current.length) return;
         const current = psdRef.current;
         if (current) redoStack.current = [...redoStack.current, current];
-        setPsd(undoStack.current.pop()!);
+        const prev = undoStack.current.pop()!;
+        psdRef.current = prev;
+        setPsd(prev);
     }, []);
 
     const handleRedo = useCallback(() => {
         if (!redoStack.current.length) return;
         const current = psdRef.current;
         if (current) undoStack.current = [...undoStack.current, current];
-        setPsd(redoStack.current.pop()!);
+        const next = redoStack.current.pop()!;
+        psdRef.current = next;
+        setPsd(next);
     }, []);
 
     const normalizeRadioGroups = useCallback((layers: any[]): any[] => {
@@ -54,24 +61,11 @@ export function usePsdHistory(initialPsd: Psd | null) {
         return normalized;
     }, []);
 
-    // [FIX] Bug #3: toggleRadioLayer の修正
-    //
-    // 旧実装の問題点:
-    //   1. siblings（LayerItem から渡された配列）を使わず、psdRef から再取得していたため
-    //      親グループ内のラジオレイヤーが正しく特定できないケースがあった。
-    //   2. 同じグループ内の * レイヤーをすべて非表示にしてから選択したレイヤーだけ
-    //      表示する処理が、updateLayerByPath を複数回呼ぶループで行われていたが、
-    //      各呼び出しが独立した psd スナップショットを返すため最後の1回しか効かなかった。
-    //
-    // 修正:
-    //   - siblings を直接参照してラジオグループを特定する。
-    //   - immutable に一括で更新してから commitPsd を1回だけ呼ぶ。
     const toggleRadioLayer = useCallback((path: number[], siblings: any[]) => {
         if (!psdRef.current) return;
         const selectedIdx = path[path.length - 1];
         const parentPath = path.slice(0, -1);
 
-        // 同じ親を持つ * レイヤーのインデックスをすべて収集
         const radioIndices = siblings
             .map((s, i) => ({ s, i }))
             .filter(({ s }) => (s.name || '').startsWith('*'))
@@ -79,11 +73,9 @@ export function usePsdHistory(initialPsd: Psd | null) {
 
         if (radioIndices.length === 0) return;
 
-        // ラジオグループ全体を一括更新（複数の updateLayerByPath を連鎖させる）
         let currentPsd = psdRef.current;
         for (const idx of radioIndices) {
             const shouldHide = idx !== selectedIdx;
-            // すでに目的の状態なら更新不要（不要な再レンダリング防止）
             if (siblings[idx].hidden === shouldHide) continue;
             currentPsd = updateLayerByPath(
                 currentPsd,
@@ -100,8 +92,8 @@ export function usePsdHistory(initialPsd: Psd | null) {
     const resetHistory = useCallback((next: Psd | null) => {
         undoStack.current = [];
         redoStack.current = [];
-        setPsd(next);
         psdRef.current = next;
+        setPsd(next);
     }, []);
 
     return {

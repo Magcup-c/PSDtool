@@ -1,6 +1,7 @@
 /**
  * src/components/tools/ExportLayersModal.tsx
  * 修正: Escape で閉じる
+ * 修正 #1: invoke の戻り値型を ExportLayersResult に修正（number → object）
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -25,9 +26,13 @@ const L = {
         selectFile: 'ファイルを選択',
         selectDir:  'フォルダを選択',
         running:    '書き出し中…',
-        done:       (n: number) => `完了 — ${n}枚のレイヤーを保存しました`,
+        done:       (n: number, skipped: number) =>
+            skipped > 0
+                ? `完了 — ${n}枚のレイヤーを保存しました（${skipped}枚スキップ）`
+                : `完了 — ${n}枚のレイヤーを保存しました`,
         noInput:    '入力ファイルを選択してください',
         noOutput:   '出力フォルダを選択してください',
+        errors:     'エラー詳細',
     },
     en: {
         title:      'Export Layers',
@@ -39,14 +44,25 @@ const L = {
         selectFile: 'Select PSD',
         selectDir:  'Select Folder',
         running:    'Exporting…',
-        done:       (n: number) => `Done — exported ${n} layers`,
+        done:       (n: number, skipped: number) =>
+            skipped > 0
+                ? `Done — exported ${n} layers (${skipped} skipped)`
+                : `Done — exported ${n} layers`,
         noInput:    'Please select an input file',
         noOutput:   'Please select an output folder',
+        errors:     'Error Details',
     },
 } as const;
 
 const FORMATS = ['png', 'jpeg', 'webp'] as const;
 type Fmt = typeof FORMATS[number];
+
+// Rust 側の ExportLayersResult と一致させる
+interface ExportLayersResult {
+    count: number;
+    skipped: number;
+    errors: string[];
+}
 
 export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props) => {
     const t = L[language];
@@ -54,7 +70,7 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
     const [outputDir,  setOutputDir]  = useState('');
     const [format,     setFormat]     = useState<Fmt>('png');
     const [running,    setRunning]    = useState(false);
-    const [resultCount,setResultCount]= useState<number | null>(null);
+    const [result,     setResult]     = useState<ExportLayersResult | null>(null);
     const [error,      setError]      = useState('');
 
     // 既存ファイルがあるなら初期値として利用
@@ -82,12 +98,13 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
     const run = useCallback(async () => {
         if (!inputPath) { setError(t.noInput);  return; }
         if (!outputDir) { setError(t.noOutput); return; }
-        setError(''); setRunning(true); setResultCount(null);
+        setError(''); setRunning(true); setResult(null);
         try {
-            const count = await invoke<number>('run_export_layers', {
-                input: inputPath, outputDir, format,
+            // [FIX #1] 戻り値の型を number から ExportLayersResult に修正
+            const res = await invoke<ExportLayersResult>('run_export_layers', {
+                input: inputPath, outputDir, format, visibleOnly: false,
             });
-            setResultCount(count);
+            setResult(res);
         } catch (e) {
             setError(String(e));
         } finally {
@@ -138,10 +155,20 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
 
                     {error && <div className="tool-error"><AlertCircle size={13} /><span>{error}</span></div>}
 
-                    {resultCount !== null && (
-                        <div className="tool-result success">
+                    {result !== null && (
+                        <div className={`tool-result ${result.errors.length === 0 ? 'success' : 'warn'}`}>
                             <CheckCircle2 size={14} />
-                            <div>{t.done(resultCount)}</div>
+                            <div>
+                                <div>{t.done(result.count, result.skipped)}</div>
+                                {result.errors.length > 0 && (
+                                    <details style={{ marginTop: 4 }}>
+                                        <summary className="tool-error-summary">{t.errors}</summary>
+                                        <ul className="tool-error-list">
+                                            {result.errors.map((e, i) => <li key={i}>{e}</li>)}
+                                        </ul>
+                                    </details>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>

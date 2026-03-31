@@ -601,11 +601,21 @@ const PsdEditor = () => {
     const renameLayer = useCallback((path: number[], newName: string) => {
         if (!psdRef.current) return;
         const updated = updateLayerByPath(psdRef.current, path, l => ({ ...l, name: newName }));
-        if (!renameSessionRef.current) { renameSessionRef.current = true; pushSnapshot(psdRef.current); }
+        if (!renameSessionRef.current) {
+            renameSessionRef.current = true;
+            pushSnapshot(psdRef.current);   // スナップショットは変更前の psdRef で取る（正しい）
+        }
+        // [FIX #3] psdRef を setPsd と同時に更新。
+        // こうしないと useEffect による同期より前に commitPsd が呼ばれた場合、
+        // undoStack に古い値が積まれてしまう。
+        psdRef.current = updated;
         setPsd(updated);
         tabManager.markDirty();
         if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-        renameTimerRef.current = setTimeout(() => { renameTimerRef.current = null; renameSessionRef.current = false; }, 600);
+        renameTimerRef.current = setTimeout(() => {
+            renameTimerRef.current = null;
+            renameSessionRef.current = false;
+        }, 600);
     }, [psdRef, setPsd, pushSnapshot, tabManager]);
 
     const handleAddLayer = useCallback(() => {

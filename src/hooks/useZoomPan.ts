@@ -17,13 +17,9 @@ export function useZoomPan(
     canvasContainerRef: React.RefObject<HTMLDivElement | null>,
     scrollAction: 'zoom' | 'pan' = 'pan'
 ) {
-    // zoom state は UI 表示（%インジケーター）専用。
-    // 実際の transform は canvasContainerRef を直接操作して管理する。
-    // → React render と DOM 操作の競合を防ぐ。
     const [zoom, setZoom] = useState(1);
     const zoomRef = useRef(1);
 
-    // キャンバス外の「何もない領域」へスクロールできないようにする
     const PADDING = 200;
 
     const isClampingRef = useRef(false);
@@ -47,61 +43,50 @@ export function useZoomPan(
         const psd = psdRef.current;
         if (!psd) return;
         const { x: ox, y: oy } = canvasOrigin(psd);
-        
-        // ズームされたキャンバスのサイズ
+
         const scaledWidth = psd.width * z;
         const scaledHeight = psd.height * z;
-        
-        // キャンバスの視覚的な左上座標
+
         const canvasVisualLeft = ox;
         const canvasVisualTop = oy;
         const canvasVisualRight = canvasVisualLeft + scaledWidth;
         const canvasVisualBottom = canvasVisualTop + scaledHeight;
-        
-        // スクロール範囲の計算
+
         const scrollableWidth = scaledWidth - el.clientWidth;
         const scrollableHeight = scaledHeight - el.clientHeight;
-        
+
         let targetScrollLeft = el.scrollLeft;
         let targetScrollTop = el.scrollTop;
-        
+
         if (scrollableWidth <= 0) {
-            // キャンバスがビューポートより小さい場合は中央に配置
             targetScrollLeft = canvasVisualLeft + scaledWidth / 2 - el.clientWidth / 2;
         } else {
-            // スクロール可能な場合は範囲内に収める
             const minL = canvasVisualLeft - PADDING;
             const maxL = canvasVisualRight - el.clientWidth + PADDING;
             targetScrollLeft = Math.min(Math.max(minL, el.scrollLeft), maxL);
         }
-        
+
         if (scrollableHeight <= 0) {
-            // 同様に垂直方向も中央に配置
             targetScrollTop = canvasVisualTop + scaledHeight / 2 - el.clientHeight / 2;
         } else {
             const minT = canvasVisualTop - PADDING;
             const maxT = canvasVisualBottom - el.clientHeight + PADDING;
             targetScrollTop = Math.min(Math.max(minT, el.scrollTop), maxT);
         }
-        
+
         const EPS = 0.5;
-        const nextLeft = targetScrollLeft;
-        const nextTop = targetScrollTop;
         let changed = false;
-        if (Math.abs(nextLeft - el.scrollLeft) > EPS) {
-            el.scrollLeft = nextLeft;
+        if (Math.abs(targetScrollLeft - el.scrollLeft) > EPS) {
+            el.scrollLeft = targetScrollLeft;
             changed = true;
         }
-        if (Math.abs(nextTop - el.scrollTop) > EPS) {
-            el.scrollTop = nextTop;
+        if (Math.abs(targetScrollTop - el.scrollTop) > EPS) {
+            el.scrollTop = targetScrollTop;
             changed = true;
         }
         if (changed) ignoreScrollUntilRef.current = performance.now() + 80;
     }, [psdRef]);
 
-    // DOM への transform 書き込みと React state 更新を分離。
-    // canvasContainerRef.current.style.transform が「実際のズーム」。
-    // setZoom は表示用 (% インジケーター) のみ。
     const applyZoom = useCallback((nextZoom: number) => {
         zoomRef.current = nextZoom;
         if (canvasContainerRef.current) {
@@ -110,9 +95,6 @@ export function useZoomPan(
         setZoom(nextZoom);
     }, [canvasContainerRef]);
 
-    // アンカー点を固定したままズームするスクロール計算。
-    // transform-origin: top left のため、キャンバス左上は常に (ox, oy)。
-    // アンカー固定条件: scrollLeft = ox + canvasX * z - anchorViewX
     const zoomAround = useCallback((
         el: HTMLDivElement,
         zoomOld: number,
@@ -124,33 +106,24 @@ export function useZoomPan(
         if (!psd) return;
         const { x: ox, y: oy } = canvasOrigin(psd);
 
-        // アンカーが指すキャンバス論理座標
         const canvasX = (el.scrollLeft + anchorViewX - ox) / zoomOld;
         const canvasY = (el.scrollTop  + anchorViewY - oy) / zoomOld;
 
-        // ズーム適用（DOM直接操作）
         applyZoom(zoomNew);
 
-        // ズーム後のスクロール位置（アンカー固定）
-        // 計算結果を一度クランプして妥当な値にする
         const rawScrollLeft = ox + canvasX * zoomNew - anchorViewX;
         const rawScrollTop = oy + canvasY * zoomNew - anchorViewY;
-        
+
         el.scrollLeft = rawScrollLeft;
         el.scrollTop = rawScrollTop;
-        
-        // 次のフレームでクランプを適用（レイアウトが確定した後）
+
         requestAnimationFrame(() => clampScroll(el, zoomNew));
     }, [psdRef, applyZoom, clampScroll]);
 
-    // transform-origin: top left で z のとき、
-    // キャンバスの視覚的中心 = ox + w*z/2
-    // scrollLeft = ox + w*z/2 - clientWidth/2
     const centerPsd = useCallback(() => {
         const el = scrollRef.current;
         const psd = psdRef.current;
         if (!el || !psd) return;
-        // clientWidth が 0 の場合でもスクロール位置を設定（後で調整される）
         const z = zoomRef.current;
         const { x: ox, y: oy } = canvasOrigin(psd);
         el.scrollLeft = ox + psd.width  * z / 2 - (el.clientWidth  > 0 ? el.clientWidth  / 2 : 0);
@@ -180,7 +153,6 @@ export function useZoomPan(
             const isZoomIntent = (e.ctrlKey || e.metaKey) || (scrollAction === 'zoom' && !e.shiftKey);
 
             if (!isZoomIntent) {
-                // ネイティブスクロール（慣性）を止めて、手動でピタッと止める
                 e.preventDefault();
                 if (deltaX !== 0) el.scrollLeft += deltaX;
                 if (deltaY !== 0) el.scrollTop += deltaY;
@@ -213,7 +185,9 @@ export function useZoomPan(
         window.addEventListener('wheel', handleWheelCapture, { passive: false, capture: true });
         return () => {
             el.removeEventListener('pointermove', handlePointerMove);
-            window.removeEventListener('wheel', handleWheelCapture, { capture: true } as AddEventListenerOptions);
+            // [FIX #5] AddEventListenerOptions へのキャストを削除。
+            // removeEventListener の第3引数は EventListenerOptions で { capture } のみ受け取る。
+            window.removeEventListener('wheel', handleWheelCapture, { capture: true });
         };
     }, [scrollRef, zoomAround, clampScroll, scrollAction]);
 
