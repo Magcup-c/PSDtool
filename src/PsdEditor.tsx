@@ -109,7 +109,7 @@ async function renderPsdToBytes(psd: any): Promise<Uint8Array> {
 
 const PsdEditor = () => {
     const {
-        psd, setPsd, psdRef, commitPsd, pushSnapshot, handleUndo, handleRedo,
+        psd, setPsd, psdRef, canUndo, canRedo, commitPsd, pushSnapshot, handleUndo, handleRedo,
         toggleRadioLayer, resetHistory,
     } = usePsdHistory(null);
 
@@ -171,7 +171,7 @@ const PsdEditor = () => {
     const layerDragCleanupRef = useRef<(() => void) | null>(null);
     const favoriteDragCleanupRef = useRef<(() => void) | null>(null);
 
-    const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA } =
+    const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
     // ── 初回ロード時センタリング ──────────────────────────────────────────────
@@ -202,6 +202,7 @@ const PsdEditor = () => {
     }, [appWindow, isFullscreen]);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
     const closeContextMenu = useCallback(() => setContextMenu(null), []);
+    const [themeHover, setThemeHover] = useState(false);
 
     const [zoomInputActive, setZoomInputActive] = useState(false);
     const [zoomInputValue, setZoomInputValue]   = useState('');
@@ -262,6 +263,8 @@ const PsdEditor = () => {
         return lang === 'ja' ? `${exportButtonLabel}で書き出し` : `Export as ${exportButtonLabel}`;
     }, [exportButtonLabel, lang]);
 
+    const hasPsd = !!psd;
+
     const L = useMemo(() => ({
         open: lang === 'ja' ? '開く' : 'Open',
         png: 'PNG',
@@ -308,6 +311,13 @@ const PsdEditor = () => {
         exportAllFavDone: (n: number) =>
             lang === 'ja' ? `${n} 件のPNGを書き出しました` : `Exported ${n} PNG file(s)`,
         copyToClipboard: lang === 'ja' ? 'クリップボードにコピー' : 'Copy to clipboard',
+        fitToScreen: lang === 'ja' ? '画面にフィット' : 'Fit to screen',
+        centerView: lang === 'ja' ? '中央に移動' : 'Center view',
+        undo: lang === 'ja' ? '元に戻す' : 'Undo',
+        redo: lang === 'ja' ? 'やり直し' : 'Redo',
+        zoomIn: lang === 'ja' ? 'ズームイン' : 'Zoom in',
+        zoomOut: lang === 'ja' ? 'ズームアウト' : 'Zoom out',
+        zoom100: '100%',
         enterFullscreen: lang === 'ja' ? '全画面表示' : 'Enter fullscreen',
         exitFullscreen: lang === 'ja' ? '全画面を終了' : 'Exit fullscreen',
         theme: lang === 'ja' ? 'テーマ' : 'Theme',
@@ -974,7 +984,7 @@ const PsdEditor = () => {
         if (target?.closest('input, textarea, [contenteditable="true"]')) return;
         e.preventDefault();
         const MENU_W = 220;
-        const MENU_H = 240;
+        const MENU_H = 360;
         const x = Math.max(8, Math.min(e.clientX, window.innerWidth  - MENU_W - 8));
         const y = Math.max(8, Math.min(e.clientY, window.innerHeight - MENU_H - 8));
         setContextMenu({ x, y });
@@ -994,6 +1004,10 @@ const PsdEditor = () => {
             window.removeEventListener('blur', onMouseDown);
             window.removeEventListener('keydown', onKeyDown);
         };
+    }, [contextMenu]);
+
+    useEffect(() => {
+        if (!contextMenu) setThemeHover(false);
     }, [contextMenu]);
 
     // ── Render ────────────────────────────────────────────────────────────────
@@ -1101,13 +1115,66 @@ const PsdEditor = () => {
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                     onMouseDown={e => e.stopPropagation()}
                     onContextMenu={e => e.preventDefault()}
+                    onMouseLeave={() => setThemeHover(false)}
                     role="menu"
                 >
                     <button
                         className="context-menu-item"
+                        disabled={!hasPsd}
                         onClick={() => { handleCopyCanvas(); closeContextMenu(); }}
                     >
                         {L.copyToClipboard}
+                    </button>
+                    <div className="context-menu-sep" />
+                    <button
+                        className="context-menu-item"
+                        disabled={!hasPsd}
+                        onClick={() => { fitToScreen(); closeContextMenu(); }}
+                    >
+                        {L.fitToScreen}
+                    </button>
+                    <button
+                        className="context-menu-item"
+                        disabled={!hasPsd}
+                        onClick={() => { centerPsd(); closeContextMenu(); }}
+                    >
+                        {L.centerView}
+                    </button>
+                    <button
+                        className="context-menu-item"
+                        disabled={!hasPsd}
+                        onClick={() => { handleZoom(0.1); closeContextMenu(); }}
+                    >
+                        {L.zoomIn}
+                    </button>
+                    <button
+                        className="context-menu-item"
+                        disabled={!hasPsd}
+                        onClick={() => { handleZoom(-0.1); closeContextMenu(); }}
+                    >
+                        {L.zoomOut}
+                    </button>
+                    <button
+                        className="context-menu-item"
+                        disabled={!hasPsd}
+                        onClick={() => { setZoomTo(1); closeContextMenu(); }}
+                    >
+                        {L.zoom100}
+                    </button>
+                    <div className="context-menu-sep" />
+                    <button
+                        className="context-menu-item"
+                        disabled={!hasPsd || !canUndo}
+                        onClick={() => { handleUndo(); closeContextMenu(); }}
+                    >
+                        {L.undo}
+                    </button>
+                    <button
+                        className="context-menu-item"
+                        disabled={!hasPsd || !canRedo}
+                        onClick={() => { handleRedo(); closeContextMenu(); }}
+                    >
+                        {L.redo}
                     </button>
                     <button
                         className="context-menu-item"
@@ -1116,22 +1183,35 @@ const PsdEditor = () => {
                         {isFullscreen ? L.exitFullscreen : L.enterFullscreen}
                     </button>
                     <div className="context-menu-sep" />
-                    <div className="context-menu-label">{L.theme}</div>
-                    {([
-                        { key: 'black', label: L.themeBlack },
-                        { key: 'grey',  label: L.themeGrey },
-                        { key: 'light', label: L.themeLight },
-                        { key: 'white', label: L.themeWhite },
-                    ] as { key: AppSettings['theme']; label: string }[]).map(th => (
-                        <button
-                            key={th.key}
-                            className={`context-menu-item ${settings.theme === th.key ? 'active' : ''}`}
-                            onClick={() => { updateSettings({ theme: th.key }); closeContextMenu(); }}
-                        >
-                            <span className="context-menu-check">{settings.theme === th.key ? 'x' : ''}</span>
-                            <span>{th.label}</span>
+                    <div
+                        className="context-menu-group"
+                        onMouseEnter={() => setThemeHover(true)}
+                        onMouseLeave={() => setThemeHover(false)}
+                    >
+                        <button className="context-menu-item" type="button">
+                            <span>{L.theme}</span>
+                            <span className="context-menu-arrow">›</span>
                         </button>
-                    ))}
+                        {themeHover && (
+                            <div className="context-menu-submenu">
+                                {([
+                                    { key: 'black', label: L.themeBlack },
+                                    { key: 'grey',  label: L.themeGrey },
+                                    { key: 'light', label: L.themeLight },
+                                    { key: 'white', label: L.themeWhite },
+                                ] as { key: AppSettings['theme']; label: string }[]).map(th => (
+                                    <button
+                                        key={th.key}
+                                        className={`context-menu-item ${settings.theme === th.key ? 'active' : ''}`}
+                                        onClick={() => { updateSettings({ theme: th.key }); closeContextMenu(); }}
+                                    >
+                                        <span className={`context-menu-dot ${settings.theme === th.key ? 'active' : ''}`} />
+                                        <span>{th.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
         </div>

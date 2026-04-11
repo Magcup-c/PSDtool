@@ -1838,6 +1838,11 @@ canvas {
     to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes contextMenuIn {
+    from { opacity: 0.2; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
 /* =============================================================================
    CONTEXT MENU
 ============================================================================= */
@@ -1851,7 +1856,7 @@ canvas {
     padding: 4px;
     z-index: 9500;
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
-    animation: fileMenuIn 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: contextMenuIn 0.14s ease;
     user-select: none;
 }
 
@@ -1878,6 +1883,40 @@ canvas {
     color: var(--fg);
 }
 
+.context-menu-group {
+    position: relative;
+}
+
+.context-menu-arrow {
+    margin-left: auto;
+    color: var(--fg-3);
+}
+
+.context-menu-submenu {
+    position: absolute;
+    left: calc(100% + 4px);
+    top: -4px;
+    min-width: 180px;
+    background: var(--bg-surface);
+    border: 1px solid var(--line-mid);
+    border-radius: 6px;
+    padding: 4px;
+    z-index: 9501;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    animation: contextMenuIn 0.12s ease;
+}
+
+.context-menu-item:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.context-menu-item:disabled:hover {
+    background: transparent;
+    color: var(--fg-3);
+}
+
 .context-menu-item.active {
     background: rgba(255, 255, 255, 0.06);
 }
@@ -1888,6 +1927,20 @@ canvas {
     color: var(--fg-2);
     font-family: 'DM Mono', monospace;
     font-size: 12px;
+}
+
+.context-menu-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--line-mid);
+    background: transparent;
+    flex-shrink: 0;
+}
+
+.context-menu-dot.active {
+    border-color: var(--accent);
+    background: var(--accent);
 }
 
 .context-menu-sep {

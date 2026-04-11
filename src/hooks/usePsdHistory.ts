@@ -4,6 +4,7 @@ import { updateLayerByPath } from '../utils/psdUtils';
 
 export function usePsdHistory(initialPsd: Psd | null) {
     const [psd, setPsd] = useState<Psd | null>(initialPsd);
+    const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
     const undoStack = useRef<Psd[]>([]);
     const redoStack = useRef<Psd[]>([]);
     const psdRef = useRef<Psd | null>(null);
@@ -14,6 +15,13 @@ export function usePsdHistory(initialPsd: Psd | null) {
 
     const MAX_UNDO = 50;
 
+    const syncHistoryState = useCallback(() => {
+        setHistoryState({
+            canUndo: undoStack.current.length > 0,
+            canRedo: redoStack.current.length > 0,
+        });
+    }, []);
+
     const commitPsd = useCallback((next: Psd) => {
         const current = psdRef.current;
         if (!current) return;
@@ -23,12 +31,14 @@ export function usePsdHistory(initialPsd: Psd | null) {
         // commitPsd 連鎖呼び出し時に psdRef が古い値を指すのを防ぐ
         psdRef.current = next;
         setPsd(next);
-    }, []);
+        syncHistoryState();
+    }, [syncHistoryState]);
 
     const pushSnapshot = useCallback((snapshot: Psd) => {
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), snapshot];
         redoStack.current = [];
-    }, []);
+        syncHistoryState();
+    }, [syncHistoryState]);
 
     const handleUndo = useCallback(() => {
         if (!undoStack.current.length) return;
@@ -37,7 +47,8 @@ export function usePsdHistory(initialPsd: Psd | null) {
         const prev = undoStack.current.pop()!;
         psdRef.current = prev;
         setPsd(prev);
-    }, []);
+        syncHistoryState();
+    }, [syncHistoryState]);
 
     const handleRedo = useCallback(() => {
         if (!redoStack.current.length) return;
@@ -46,7 +57,8 @@ export function usePsdHistory(initialPsd: Psd | null) {
         const next = redoStack.current.pop()!;
         psdRef.current = next;
         setPsd(next);
-    }, []);
+        syncHistoryState();
+    }, [syncHistoryState]);
 
     const normalizeRadioGroups = useCallback((layers: any[]): any[] => {
         const processed = layers.map((layer) =>
@@ -94,12 +106,15 @@ export function usePsdHistory(initialPsd: Psd | null) {
         redoStack.current = [];
         psdRef.current = next;
         setPsd(next);
-    }, []);
+        syncHistoryState();
+    }, [syncHistoryState]);
 
     return {
         psd,
         setPsd,
         psdRef,
+        canUndo: historyState.canUndo,
+        canRedo: historyState.canRedo,
         commitPsd,
         pushSnapshot,
         handleUndo,

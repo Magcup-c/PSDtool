@@ -308,5 +308,18 @@ export function useZoomPan(
         requestAnimationFrame(() => centerPsd());
     }, [applyZoom, centerPsd]);
 
-    return { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, SCROLL_AREA };
+    const fitToScreen = useCallback(() => {
+        const el = scrollRef.current;
+        const psd = psdRef.current;
+        if (!el || !psd) return;
+        const MARGIN = 40;
+        const availW = Math.max(1, el.clientWidth - MARGIN * 2);
+        const availH = Math.max(1, el.clientHeight - MARGIN * 2);
+        const scale = Math.min(availW / psd.width, availH / psd.height);
+        const clamped = Math.max(0.1, Math.min(5, scale));
+        setZoomTo(clamped);
+        requestAnimationFrame(() => centerPsd());
+    }, [scrollRef, psdRef, setZoomTo, centerPsd]);
+
+    return { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA };
 }
