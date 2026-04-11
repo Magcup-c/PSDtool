@@ -1,12 +1,5 @@
 /**
  * src/PsdEditor.tsx
- *
- * 変更点（お気に入り強化）:
- *   1. saveFavorite 時にキャンバスから 64px プレビュー dataUrl を生成
- *   2. handleExportFavoriteImage — 1件ずつ PNG 書き出し
- *   3. handleExportAllFavoriteImages — 全件一括 PNG 書き出し
- *   4. importFavorites をフックから取得して LayerPanel に渡す
- *   5. LayerPanel に新 props 4つを接続
  */
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
@@ -95,7 +88,6 @@ async function exportCanvas(
     });
 }
 
-/** オフスクリーンキャンバスに psd の visible レイヤーを描画して PNG bytes を返す */
 async function renderPsdToBytes(psd: any): Promise<Uint8Array> {
     const oc  = new OffscreenCanvas(psd.width, psd.height);
     const ctx = oc.getContext('2d')!;
@@ -126,7 +118,6 @@ const PsdEditor = () => {
     const [showSettings, setShowSettings] = useState(false);
     const { recentFiles, addRecentFile, clearRecentFiles } = useRecentFiles(settings.maxRecentFiles ?? 10);
 
-    // ── タブ管理 ──
     const tabManager = useTabManager();
     const { tabs, activeId, updateTab } = tabManager;
     const tabsRef    = useRef(tabs);
@@ -428,8 +419,22 @@ const PsdEditor = () => {
 
     const handleCloseTab = useCallback((id: string) => {
         loadGenByTabRef.current.delete(id);
+
+        // 最後の1枚を閉じる場合:
+        // useTabManager は activeId を変えずに中身だけリセットするため
+        // useLayoutEffect の「タブ切り替え」検知が発火しない。
+        // PSD 関連の React state はここで明示的にリセットする。
+        if (tabsRef.current.length === 1) {
+            resetHistory(null);
+            setCurrentFilePath(null);
+            setFlipX(false);
+            setFlipY(false);
+            setClosedKeys(new Set());
+            setSearchQuery('');
+        }
+
         startTransition(() => { tabManager.closeTab(id); });
-    }, [tabManager]);
+    }, [tabManager, resetHistory]);
 
     const handleActivateTab = useCallback((id: string) => {
         tabManager.setActiveId(id);
@@ -613,11 +618,8 @@ const PsdEditor = () => {
         const updated = updateLayerByPath(psdRef.current, path, l => ({ ...l, name: newName }));
         if (!renameSessionRef.current) {
             renameSessionRef.current = true;
-            pushSnapshot(psdRef.current);   // スナップショットは変更前の psdRef で取る（正しい）
+            pushSnapshot(psdRef.current);
         }
-        // [FIX #3] psdRef を setPsd と同時に更新。
-        // こうしないと useEffect による同期より前に commitPsd が呼ばれた場合、
-        // undoStack に古い値が積まれてしまう。
         psdRef.current = updated;
         setPsd(updated);
         tabManager.markDirty();
@@ -800,8 +802,6 @@ const PsdEditor = () => {
         showToast(L.applied);
     }, [commitPsd, psdRef, showToast, L, setZoomTo]);
 
-    // ── お気に入り PNG 書き出し（1件）────────────────────────────────────────
-
     const handleExportFavoriteImage = useCallback(async (fav: LayerFavorite) => {
         if (!psdRef.current) return;
         const current     = psdRef.current;
@@ -827,8 +827,6 @@ const PsdEditor = () => {
         }
     }, [psdRef, showToast, L, lang]);
 
-    // ── お気に入り PNG 書き出し（全件一括）───────────────────────────────────
-
     const handleExportAllFavoriteImages = useCallback(async () => {
         if (!psdRef.current || favorites.length === 0) return;
         try {
@@ -853,8 +851,6 @@ const PsdEditor = () => {
         }
     }, [psdRef, favorites, showToast, L, lang]);
 
-    // ── お気に入り保存ダイアログ ──────────────────────────────────────────────
-
     const openCreateFavorite = useCallback(() => {
         if (!psdRef.current?.children) return;
         setFavoriteDialog({ mode: 'create', value: `${L.favorites} ${favorites.length + 1}` });
@@ -867,7 +863,6 @@ const PsdEditor = () => {
         if (favoriteDialog.mode === 'create') {
             if (!psdRef.current?.children) return;
 
-            // キャンバスから 64px サムネイル dataUrl を生成
             const previewDataUrl = (() => {
                 const src = canvasRef.current;
                 if (!src) return undefined;

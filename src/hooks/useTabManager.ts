@@ -13,13 +13,12 @@ export interface TabState {
     filePath: string | null;
     fileName: string;
     psd: Psd | null;
-    isDirty: boolean;       // 未保存変更あり
+    isDirty: boolean;
     isLoading: boolean;
-    // UI状態（タブ切り替え時に復元）
     zoom: number;
     flipX: boolean;
     flipY: boolean;
-    closedKeys: string[];   // Set は JSON 非対応なので配列で保持
+    closedKeys: string[];
     scrollLeft: number;
     scrollTop: number;
 }
@@ -56,17 +55,12 @@ export function useTabManager() {
     const [tabs, setTabs] = useState<TabState[]>([makeEmptyTab()]);
     const [activeId, setActiveId] = useState<string>(tabs[0].id);
 
-    // 現在アクティブなタブ
     const activeTab = tabs.find(t => t.id === activeId) ?? tabs[0];
 
-    // --- 内部ヘルパー ---
     const updateTab = useCallback((id: string, patch: Partial<TabState>) => {
         setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
     }, []);
 
-    // --- 公開API ---
-
-    /** 新しいタブを末尾に追加してアクティブにする */
     const openNewTab = useCallback((overrides?: Partial<TabState>): string => {
         const tab = makeEmptyTab(overrides);
         setTabs(prev => [...prev, tab]);
@@ -74,7 +68,6 @@ export function useTabManager() {
         return tab.id;
     }, []);
 
-    /** 指定パスを既存タブで開いているか検索し、あればアクティブ化して true を返す */
     const activateExistingTab = useCallback((filePath: string): boolean => {
         const existing = tabs.find(t => t.filePath === filePath);
         if (existing) {
@@ -84,18 +77,23 @@ export function useTabManager() {
         return false;
     }, [tabs]);
 
-    /** タブを閉じる。最後の1枚は Untitled タブに置き換える */
+    /**
+     * タブを閉じる。
+     * 最後の1枚のときは id を保持したまま中身だけ Untitled にリセットする。
+     * id を変えると activeId も変わり、PsdEditor の useLayoutEffect が
+     * 「タブ切り替え」と誤解釈して表示バグ・クラッシュの原因になるため。
+     */
     const closeTab = useCallback((id: string) => {
         setTabs(prev => {
             if (prev.length === 1) {
-                // 最後の1枚は空タブに置き換え。id を新規にして activeId が変わるようにする
-                // （同一 id のままだと PsdEditor のタブ同期が走らず前タブの PSD が残る）
-                const reset = makeEmptyTab();
-                setActiveId(reset.id);
+                // id はそのまま保持し、中身だけ空にリセット
+                const reset: TabState = {
+                    ...makeEmptyTab(),
+                    id: prev[0].id,
+                };
                 return [reset];
             }
             const next = prev.filter(t => t.id !== id);
-            // 閉じたタブがアクティブだった場合、隣のタブに移動
             setActiveId(cur => {
                 if (cur !== id) return cur;
                 const closedIdx = prev.findIndex(t => t.id === id);
@@ -105,7 +103,6 @@ export function useTabManager() {
         });
     }, []);
 
-    /** アクティブタブの PSD/状態を更新 */
     const setActivePsd = useCallback((psd: Psd | null, filePath?: string | null) => {
         setTabs(prev => prev.map(t => {
             if (t.id !== activeId) return t;
@@ -128,12 +125,10 @@ export function useTabManager() {
         updateTab(id ?? activeId, { isDirty: true });
     }, [activeId, updateTab]);
 
-    /** スクロール/ズーム/フリップをアクティブタブに保存 */
     const saveActiveUiState = useCallback((state: Partial<Pick<TabState, 'zoom' | 'flipX' | 'flipY' | 'closedKeys' | 'scrollLeft' | 'scrollTop'>>) => {
         updateTab(activeId, state);
     }, [activeId, updateTab]);
 
-    /** タブの順序を入れ替え（ドラッグ&ドロップ用） */
     const reorderTabs = useCallback((fromId: string, toId: string) => {
         setTabs(prev => {
             const from = prev.findIndex(t => t.id === fromId);
