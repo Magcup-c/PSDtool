@@ -315,6 +315,29 @@ fn wants_help(args: &[String]) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  PSD Metadata Structures
+// ─────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct PsdLayerInfo {
+    pub name: String,
+    pub visible: bool,
+    pub opacity: u8,
+    pub left: i32,
+    pub top: i32,
+    pub width: u32,
+    pub height: u32,
+    pub children: Option<Vec<PsdLayerInfo>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct PsdMetadata {
+    pub width: u32,
+    pub height: u32,
+    pub layers: Vec<PsdLayerInfo>,
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Tauri invoke commands
 // ─────────────────────────────────────────────────────────────
 
@@ -326,6 +349,30 @@ fn greet(name: &str) -> String {
 #[tauri::command]
 fn get_launch_args() -> Vec<String> {
     std::env::args().collect()
+}
+
+#[tauri::command]
+fn parse_psd_metadata(file_path: String) -> Result<PsdMetadata, String> {
+    let psd = load_psd(&file_path)?;
+    let width = psd.width();
+    let height = psd.height();
+    let mut layers = Vec::new();
+    
+    for layer in psd.layers() {
+        let layer_info = PsdLayerInfo {
+            name: layer.name().to_string(),
+            visible: layer.visible(),
+            opacity: layer.opacity(),
+            left: layer.layer_left() as i32,
+            top: layer.layer_top() as i32,
+            width: layer.width() as u32,
+            height: layer.height() as u32,
+            children: None,
+        };
+        layers.push(layer_info);
+    }
+    
+    Ok(PsdMetadata { width, height, layers })
 }
 
 #[tauri::command]
@@ -1301,7 +1348,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             let _ = app.emit("open-file", args);
         }))
-        .invoke_handler(tauri::generate_handler![greet, get_launch_args, open_default_app_settings,run_batch, run_export_layers, run_compare, run_sprite,])
+        .invoke_handler(tauri::generate_handler![greet, get_launch_args, parse_psd_metadata, open_default_app_settings,run_batch, run_export_layers, run_compare, run_sprite,])
         .setup(|app| {
             match app.cli().matches() {
                 Ok(matches) => {

@@ -382,7 +382,7 @@ const PsdEditor = () => {
         try {
             const data   = await readFile(filePath);
             if (!tabStillTargeted()) return;
-            const result = await loadPsd(data.buffer);
+            const result = await loadPsd(data.buffer, filePath);
             if (!tabStillTargeted()) return;
             const nextPsd = result.layers.length > 0 ? attachThumbs(result.psd, result.layers) : result.psd;
             if (!tabStillTargeted()) return;

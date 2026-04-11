@@ -11,7 +11,13 @@
 
 import { Psd } from 'ag-psd';
 import { SearchResult } from '../types';
-import type { LayerThumbEntry } from '../workers/psdWorker';
+
+export interface LayerThumbEntry {
+    key: string;
+    bitmap: ImageBitmap;
+    left: number;
+    top: number;
+}
 
 export function getLayersAtPath(children: any[], parentPath: number[]): any[] {
     let current = children;

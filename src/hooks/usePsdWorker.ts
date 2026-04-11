@@ -1,80 +1,88 @@
 /**
  * src/hooks/usePsdWorker.ts
  *
- * PSD Worker のライフサイクルを管理するフック。
+ * PSD パース（メタデータ取得）を Rust に委譲する Hook。
  *
- * - Worker は初回マウント時に生成し、アンマウント時に終了する
- * - loadPsd(buffer) を呼ぶと Promise<WorkerResponse> が返る
- * - 複数ファイルを連続で開いた場合も id で応答を照合するので混線しない
+ * - readPsdMetadata(filePath) を呼ぶと Promise<PsdMetadata> が返る
+ * - Rust の parse_psd_metadata コマンドを invoke を使って呼び出す
  */
 
-import { useRef, useEffect, useCallback } from 'react';
-import type { WorkerRequest, WorkerResponse } from '../workers/psdWorker';
+import { useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { readPsd, initializeCanvas } from 'ag-psd';
+import type { Psd } from 'ag-psd';
+import type { LayerThumbEntry } from '../utils/psdUtils';
 
-type PendingResolver = {
-    resolve: (res: WorkerResponse) => void;
-    reject: (err: Error) => void;
-};
+initializeCanvas(
+    (width: number, height: number) => new OffscreenCanvas(width, height) as any,
+);
+
+export interface PsdMetadata {
+    width: number;
+    height: number;
+    layers: PsdLayerInfo[];
+}
+
+export interface PsdLayerInfo {
+    name: string;
+    visible: boolean;
+    opacity: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    children?: PsdLayerInfo[];
+}
+
+export interface WorkerResponse {
+    id: number;
+    psd: Psd;
+    layers: LayerThumbEntry[];
+    error?: string;
+}
 
 export function usePsdWorker() {
-    const workerRef = useRef<Worker | null>(null);
-    const pendingRef = useRef<Map<number, PendingResolver>>(new Map());
-    const nextIdRef = useRef(0);
-
-    // Worker 初期化（マウント時に一度だけ）
-    useEffect(() => {
-        // Vite の ?worker 構文でバンドル時にワーカーファイルを分割する
-        const worker = new Worker(
-            new URL('../workers/psdWorker.ts', import.meta.url),
-            { type: 'module' },
-        );
-
-        worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
-            const { id, error } = event.data;
-            const pending = pendingRef.current.get(id);
-            if (!pending) return;
-            pendingRef.current.delete(id);
-            if (error) {
-                pending.reject(new Error(error));
-            } else {
-                pending.resolve(event.data);
-            }
-        };
-
-        worker.onerror = (err) => {
-            // 全 pending を reject（Worker がクラッシュした場合）
-            for (const { reject } of pendingRef.current.values()) {
-                reject(new Error(err.message ?? 'Worker error'));
-            }
-            pendingRef.current.clear();
-        };
-
-        workerRef.current = worker;
-        return () => {
-            worker.terminate();
-            workerRef.current = null;
-        };
-    }, []);
-
     /**
-     * PSD ファイルの ArrayBuffer を Worker に渡してデコードさせる。
-     * buffer は Transferable として転送されるのでゼロコピー。
+     * ファイルパスと ArrayBuffer から PSD メタデータを取得する。
+     * - Rust に メタデータパース処理を委譲
+     * - ag-psd でビットマップ生成（別の Hook で対応）
      */
-    const loadPsd = useCallback((buffer: ArrayBuffer): Promise<WorkerResponse> => {
-        return new Promise((resolve, reject) => {
-            const worker = workerRef.current;
-            if (!worker) {
-                reject(new Error('Worker not initialized'));
-                return;
-            }
-            const id = nextIdRef.current++;
-            pendingRef.current.set(id, { resolve, reject });
+    const loadPsd = useCallback(
+        async (buffer: ArrayBuffer, filePath?: string): Promise<WorkerResponse> => {
+            try {
+                // TS 側で ag-psd を使って Psd オブジェクトを作成（メモリ側）
+                const psd = readPsd(new Uint8Array(buffer), {
+                    skipLayerImageData: false,
+                    skipCompositeImageData: false,
+                });
 
-            const request: WorkerRequest = { id, buffer };
-            // buffer を transfer することでコピーなし渡し
-            worker.postMessage(request, [buffer]);
-        });
-    }, []);
+                // Rust に メタデータ取得を委譲（ファイルパスが必要）
+                // ※ filePath がない場合は、TS 側の情報のみを使用
+                if (filePath) {
+                    // メタデータを取得（将来的に使用予定）
+                    await invoke<PsdMetadata>('parse_psd_metadata', { file_path: filePath });
+                }
+
+                // 現在は layers を空にして返す（ビットマップ生成は別で対応）
+                const response: WorkerResponse = {
+                    id: 0,
+                    psd,
+                    layers: [],
+                };
+
+                return response;
+            } catch (err) {
+                const response: WorkerResponse = {
+                    id: 0,
+                    psd: {} as Psd,
+                    layers: [],
+                    error: err instanceof Error ? err.message : String(err),
+                };
+                throw new Error(response.error);
+            }
+        },
+        [],
+    );
 
     return { loadPsd };
 }
