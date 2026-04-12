@@ -22,21 +22,32 @@ export function useZoomPan(
 
     const PADDING = 200;
 
-    const isClampingRef = useRef(false);
-    const ignoreScrollUntilRef = useRef(0);
-    const isPanningRef = useRef(false);
-    const scrollClampTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const nativeInputUntilRef = useRef(0);
-    const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+    const isClampingRef         = useRef(false);
+    const ignoreScrollUntilRef  = useRef(0);
+    const isPanningRef          = useRef(false);
+    const scrollClampTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const nativeInputUntilRef   = useRef(0);
+    const lastPointerRef        = useRef<{ x: number; y: number } | null>(null);
+
+    // ── cleanup: scrollClampTimer ─────────────────────────────────────────────
+    useEffect(() => {
+        return () => {
+            if (scrollClampTimerRef.current) {
+                clearTimeout(scrollClampTimerRef.current);
+                scrollClampTimerRef.current = null;
+            }
+        };
+    }, []);
 
     const getScrollability = useCallback((el: HTMLDivElement, z: number) => {
         const psd = psdRef.current;
         if (!psd) return { canScrollX: false, canScrollY: false };
-        const scaledWidth = psd.width * z;
+        const scaledWidth  = psd.width  * z;
         const scaledHeight = psd.height * z;
-        const canScrollX = scaledWidth - el.clientWidth > 1;
-        const canScrollY = scaledHeight - el.clientHeight > 1;
-        return { canScrollX, canScrollY };
+        return {
+            canScrollX: scaledWidth  - el.clientWidth  > 1,
+            canScrollY: scaledHeight - el.clientHeight > 1,
+        };
     }, [psdRef]);
 
     const clampScroll = useCallback((el: HTMLDivElement, z: number) => {
@@ -44,46 +55,42 @@ export function useZoomPan(
         if (!psd) return;
         const { x: ox, y: oy } = canvasOrigin(psd);
 
-        const scaledWidth = psd.width * z;
+        const scaledWidth  = psd.width  * z;
         const scaledHeight = psd.height * z;
 
-        const canvasVisualLeft = ox;
-        const canvasVisualTop = oy;
-        const canvasVisualRight = canvasVisualLeft + scaledWidth;
-        const canvasVisualBottom = canvasVisualTop + scaledHeight;
+        const canvasVisualLeft   = ox;
+        const canvasVisualTop    = oy;
+        const canvasVisualRight  = ox + scaledWidth;
+        const canvasVisualBottom = oy + scaledHeight;
 
-        const scrollableWidth = scaledWidth - el.clientWidth;
+        const scrollableWidth  = scaledWidth  - el.clientWidth;
         const scrollableHeight = scaledHeight - el.clientHeight;
 
         let targetScrollLeft = el.scrollLeft;
-        let targetScrollTop = el.scrollTop;
+        let targetScrollTop  = el.scrollTop;
 
         if (scrollableWidth <= 0) {
             targetScrollLeft = canvasVisualLeft + scaledWidth / 2 - el.clientWidth / 2;
         } else {
-            const minL = canvasVisualLeft - PADDING;
-            const maxL = canvasVisualRight - el.clientWidth + PADDING;
-            targetScrollLeft = Math.min(Math.max(minL, el.scrollLeft), maxL);
+            targetScrollLeft = Math.min(
+                Math.max(canvasVisualLeft - PADDING, el.scrollLeft),
+                canvasVisualRight - el.clientWidth + PADDING,
+            );
         }
 
         if (scrollableHeight <= 0) {
             targetScrollTop = canvasVisualTop + scaledHeight / 2 - el.clientHeight / 2;
         } else {
-            const minT = canvasVisualTop - PADDING;
-            const maxT = canvasVisualBottom - el.clientHeight + PADDING;
-            targetScrollTop = Math.min(Math.max(minT, el.scrollTop), maxT);
+            targetScrollTop = Math.min(
+                Math.max(canvasVisualTop - PADDING, el.scrollTop),
+                canvasVisualBottom - el.clientHeight + PADDING,
+            );
         }
 
         const EPS = 0.5;
         let changed = false;
-        if (Math.abs(targetScrollLeft - el.scrollLeft) > EPS) {
-            el.scrollLeft = targetScrollLeft;
-            changed = true;
-        }
-        if (Math.abs(targetScrollTop - el.scrollTop) > EPS) {
-            el.scrollTop = targetScrollTop;
-            changed = true;
-        }
+        if (Math.abs(targetScrollLeft - el.scrollLeft) > EPS) { el.scrollLeft = targetScrollLeft; changed = true; }
+        if (Math.abs(targetScrollTop  - el.scrollTop)  > EPS) { el.scrollTop  = targetScrollTop;  changed = true; }
         if (changed) ignoreScrollUntilRef.current = performance.now() + 80;
     }, [psdRef]);
 
@@ -111,17 +118,14 @@ export function useZoomPan(
 
         applyZoom(zoomNew);
 
-        const rawScrollLeft = ox + canvasX * zoomNew - anchorViewX;
-        const rawScrollTop = oy + canvasY * zoomNew - anchorViewY;
-
-        el.scrollLeft = rawScrollLeft;
-        el.scrollTop = rawScrollTop;
+        el.scrollLeft = ox + canvasX * zoomNew - anchorViewX;
+        el.scrollTop  = oy + canvasY * zoomNew - anchorViewY;
 
         requestAnimationFrame(() => clampScroll(el, zoomNew));
     }, [psdRef, applyZoom, clampScroll]);
 
     const centerPsd = useCallback(() => {
-        const el = scrollRef.current;
+        const el  = scrollRef.current;
         const psd = psdRef.current;
         if (!el || !psd) return;
         const z = zoomRef.current;
@@ -129,6 +133,8 @@ export function useZoomPan(
         el.scrollLeft = ox + psd.width  * z / 2 - (el.clientWidth  > 0 ? el.clientWidth  / 2 : 0);
         el.scrollTop  = oy + psd.height * z / 2 - (el.clientHeight > 0 ? el.clientHeight / 2 : 0);
     }, [scrollRef, psdRef]);
+
+    // ── ホイール / ジェスチャー ────────────────────────────────────────────────
 
     useEffect(() => {
         const el = scrollRef.current;
@@ -149,30 +155,26 @@ export function useZoomPan(
             if (performance.now() < nativeInputUntilRef.current) return;
             const deltaY = normalizeDelta(e, e.deltaY);
             const deltaX = normalizeDelta(e, e.deltaX);
-
-            const isZoomIntent = (e.ctrlKey || e.metaKey) || (scrollAction === 'zoom' && !e.shiftKey);
+            const isZoomIntent = e.ctrlKey || e.metaKey || (scrollAction === 'zoom' && !e.shiftKey);
 
             if (!isZoomIntent) {
                 e.preventDefault();
                 if (deltaX !== 0) el.scrollLeft += deltaX;
-                if (deltaY !== 0) el.scrollTop += deltaY;
+                if (deltaY !== 0) el.scrollTop  += deltaY;
                 clampScroll(el, zoomRef.current);
                 return;
             }
 
             e.preventDefault();
-            const sensitivity = 0.015;
-            const zoomOld = zoomRef.current;
-            const clampedDelta = Math.max(-20, Math.min(20, deltaY));
-            const zoomNew = Math.min(5, Math.max(0.1,
-                zoomOld * Math.exp(-clampedDelta * sensitivity)
-            ));
+            const zoomOld     = zoomRef.current;
+            const clamped     = Math.max(-20, Math.min(20, deltaY));
+            const zoomNew     = Math.min(5, Math.max(0.1, zoomOld * Math.exp(-clamped * 0.015)));
             if (Math.abs(zoomNew - zoomOld) < 0.0005) return;
-            const rect = el.getBoundingClientRect();
-            const anchor =
-                (e.clientX !== 0 || e.clientY !== 0)
-                    ? { x: e.clientX - rect.left, y: e.clientY - rect.top }
-                    : (lastPointerRef.current ?? { x: rect.width / 2, y: rect.height / 2 });
+
+            const rect   = el.getBoundingClientRect();
+            const anchor = (e.clientX !== 0 || e.clientY !== 0)
+                ? { x: e.clientX - rect.left, y: e.clientY - rect.top }
+                : (lastPointerRef.current ?? { x: rect.width / 2, y: rect.height / 2 });
             zoomAround(el, zoomOld, zoomNew, anchor.x, anchor.y);
         };
 
@@ -185,8 +187,6 @@ export function useZoomPan(
         window.addEventListener('wheel', handleWheelCapture, { passive: false, capture: true });
         return () => {
             el.removeEventListener('pointermove', handlePointerMove);
-            // [FIX #5] AddEventListenerOptions へのキャストを削除。
-            // removeEventListener の第3引数は EventListenerOptions で { capture } のみ受け取る。
             window.removeEventListener('wheel', handleWheelCapture, { capture: true });
         };
     }, [scrollRef, zoomAround, clampScroll, scrollAction]);
@@ -194,34 +194,34 @@ export function useZoomPan(
     useEffect(() => {
         let unlisten: (() => void) | null = null;
         const setup = async () => {
-            unlisten = await listen<{ kind: 'zoom'; scale: number; x: number; y: number } | { kind: 'pan'; dx: number; dy: number }>(
-                'native-gesture',
-                (event) => {
-                    const el = scrollRef.current;
-                    if (!el) return;
-                    nativeInputUntilRef.current = performance.now() + 120;
-                    const payload = event.payload;
-                    if (!payload || typeof payload !== 'object') return;
-                    if (payload.kind === 'zoom') {
-                        const zoomOld = zoomRef.current;
-                        const zoomNew = Math.max(0.1, Math.min(5, zoomOld * payload.scale));
-                        if (Math.abs(zoomNew - zoomOld) < 0.0005) return;
-                        zoomAround(el, zoomOld, zoomNew, payload.x, payload.y);
-                        return;
-                    }
-                    if (payload.kind === 'pan') {
-                        if (payload.dx !== 0) el.scrollLeft -= payload.dx;
-                        if (payload.dy !== 0) el.scrollTop -= payload.dy;
-                        clampScroll(el, zoomRef.current);
-                    }
+            unlisten = await listen<
+                | { kind: 'zoom'; scale: number; x: number; y: number }
+                | { kind: 'pan';  dx: number; dy: number }
+            >('native-gesture', (event) => {
+                const el = scrollRef.current;
+                if (!el) return;
+                nativeInputUntilRef.current = performance.now() + 120;
+                const payload = event.payload;
+                if (!payload || typeof payload !== 'object') return;
+                if (payload.kind === 'zoom') {
+                    const zoomOld = zoomRef.current;
+                    const zoomNew = Math.max(0.1, Math.min(5, zoomOld * payload.scale));
+                    if (Math.abs(zoomNew - zoomOld) < 0.0005) return;
+                    zoomAround(el, zoomOld, zoomNew, payload.x, payload.y);
+                    return;
                 }
-            );
+                if (payload.kind === 'pan') {
+                    if (payload.dx !== 0) el.scrollLeft -= payload.dx;
+                    if (payload.dy !== 0) el.scrollTop  -= payload.dy;
+                    clampScroll(el, zoomRef.current);
+                }
+            });
         };
         setup();
-        return () => {
-            if (unlisten) unlisten();
-        };
+        return () => { if (unlisten) unlisten(); };
     }, [scrollRef, zoomAround, clampScroll]);
+
+    // ── スクロールクランプ（クリーンアップ付き）──────────────────────────────
 
     useEffect(() => {
         const el = scrollRef.current;
@@ -230,8 +230,10 @@ export function useZoomPan(
         const onScroll = () => {
             if (isPanningRef.current) return;
             if (performance.now() < ignoreScrollUntilRef.current) return;
+
             if (scrollClampTimerRef.current) clearTimeout(scrollClampTimerRef.current);
             scrollClampTimerRef.current = setTimeout(() => {
+                scrollClampTimerRef.current = null;
                 if (performance.now() < ignoreScrollUntilRef.current) return;
                 if (isClampingRef.current) return;
                 isClampingRef.current = true;
@@ -245,7 +247,11 @@ export function useZoomPan(
         el.addEventListener('scroll', onScroll, { passive: true });
         return () => {
             el.removeEventListener('scroll', onScroll);
-            if (scrollClampTimerRef.current) clearTimeout(scrollClampTimerRef.current);
+            // ← ここで確実にクリア（修正箇所）
+            if (scrollClampTimerRef.current) {
+                clearTimeout(scrollClampTimerRef.current);
+                scrollClampTimerRef.current = null;
+            }
         };
     }, [scrollRef, clampScroll]);
 
@@ -257,15 +263,19 @@ export function useZoomPan(
         return () => window.removeEventListener('resize', onResize);
     }, [scrollRef, clampScroll]);
 
+    // ── マウスドラッグパン ────────────────────────────────────────────────────
+
     useEffect(() => {
         const el = scrollRef.current;
         if (!el) return;
         let dragging = false, lastX = 0, lastY = 0;
+
         const onMouseDown = (e: MouseEvent) => {
             if (e.button !== 0 && e.button !== 1) return;
             dragging = true; lastX = e.clientX; lastY = e.clientY;
             isPanningRef.current = true;
-            el.style.cursor = 'grabbing'; e.preventDefault();
+            el.style.cursor = 'grabbing';
+            e.preventDefault();
         };
         const onMouseMove = (e: MouseEvent) => {
             if (!dragging) return;
@@ -276,7 +286,12 @@ export function useZoomPan(
             lastX = e.clientX; lastY = e.clientY;
             clampScroll(el, zoomRef.current);
         };
-        const onMouseUp = () => { dragging = false; isPanningRef.current = false; el.style.cursor = ''; };
+        const onMouseUp = () => {
+            dragging = false;
+            isPanningRef.current = false;
+            el.style.cursor = '';
+        };
+
         el.addEventListener('mousedown', onMouseDown);
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', onMouseUp);
@@ -287,8 +302,10 @@ export function useZoomPan(
         };
     }, [scrollRef, clampScroll, getScrollability]);
 
+    // ── 公開API ───────────────────────────────────────────────────────────────
+
     const handleZoom = useCallback((delta: number) => {
-        const el = scrollRef.current;
+        const el      = scrollRef.current;
         const zoomOld = zoomRef.current;
         const zoomNew = Math.max(0.1, Math.min(5, Math.round((zoomOld + delta) * 100) / 100));
         if (zoomNew === zoomOld || !el) return;
@@ -296,7 +313,7 @@ export function useZoomPan(
     }, [scrollRef, zoomAround]);
 
     const setZoomTo = useCallback((nextZoom: number) => {
-        const el = scrollRef.current;
+        const el      = scrollRef.current;
         const zoomOld = zoomRef.current;
         const zoomNew = Math.max(0.1, Math.min(5, nextZoom));
         if (zoomNew === zoomOld || !el) return;
@@ -309,15 +326,15 @@ export function useZoomPan(
     }, [applyZoom, centerPsd]);
 
     const fitToScreen = useCallback(() => {
-        const el = scrollRef.current;
+        const el  = scrollRef.current;
         const psd = psdRef.current;
         if (!el || !psd) return;
-        const MARGIN = 40;
-        const availW = Math.max(1, el.clientWidth - MARGIN * 2);
-        const availH = Math.max(1, el.clientHeight - MARGIN * 2);
-        const scale = Math.min(availW / psd.width, availH / psd.height);
-        const clamped = Math.max(0.1, Math.min(5, scale));
-        setZoomTo(clamped);
+        const MARGIN  = 40;
+        const scale   = Math.min(
+            (el.clientWidth  - MARGIN * 2) / psd.width,
+            (el.clientHeight - MARGIN * 2) / psd.height,
+        );
+        setZoomTo(Math.max(0.1, Math.min(5, scale)));
         requestAnimationFrame(() => centerPsd());
     }, [scrollRef, psdRef, setZoomTo, centerPsd]);
 

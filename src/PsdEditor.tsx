@@ -430,10 +430,6 @@ const PsdEditor = () => {
     const handleCloseTab = useCallback((id: string) => {
         loadGenByTabRef.current.delete(id);
 
-        // 最後の1枚を閉じる場合:
-        // useTabManager は activeId を変えずに中身だけリセットするため
-        // useLayoutEffect の「タブ切り替え」検知が発火しない。
-        // PSD 関連の React state はここで明示的にリセットする。
         if (tabsRef.current.length === 1) {
             resetHistory(null);
             setCurrentFilePath(null);
@@ -492,6 +488,23 @@ const PsdEditor = () => {
         } catch (err) { showToast(`${L.openFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     }, [openPsdUnified, showToast, L]);
 
+    // ── クリップボードコピー（キーボードショートカットより前に定義）────────────
+
+    const handleCopyCanvas = useCallback(async () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        try {
+            await new Promise<void>((resolve, reject) => {
+                canvas.toBlob(async blob => {
+                    if (!blob) { reject(new Error('toBlob failed')); return; }
+                    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); resolve(); }
+                    catch (e) { reject(e); }
+                }, 'image/png');
+            });
+            showToast(L.copied);
+        } catch (err) { showToast(`${L.copyFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
+    }, [showToast, L]);
+
     // ── キーボードショートカット ──────────────────────────────────────────────
 
     useEffect(() => {
@@ -529,8 +542,8 @@ const PsdEditor = () => {
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [handleUndo, handleRedo, handleOpenFile, handleToggleFullscreen, handleZoom, centerPsd,
-        tabs, activeId, handleActivateTab, handleCloseTab, handleNewTab]);
+    }, [handleUndo, handleRedo, handleCopyCanvas, handleOpenFile, handleToggleFullscreen,
+        handleZoom, centerPsd, tabs, activeId, handleActivateTab, handleCloseTab, handleNewTab]);
 
     // ── サイドバーリサイズ ────────────────────────────────────────────────────
 
@@ -595,23 +608,6 @@ const PsdEditor = () => {
             }
         } catch (err) { showToast(`${L.exportFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     };
-
-    // ── クリップボードコピー ──────────────────────────────────────────────────
-
-    const handleCopyCanvas = useCallback(async () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        try {
-            await new Promise<void>((resolve, reject) => {
-                canvas.toBlob(async blob => {
-                    if (!blob) { reject(new Error('toBlob failed')); return; }
-                    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); resolve(); }
-                    catch (e) { reject(e); }
-                }, 'image/png');
-            });
-            showToast(L.copied);
-        } catch (err) { showToast(`${L.copyFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
-    }, [showToast, L]);
 
     // ── レイヤー操作 ──────────────────────────────────────────────────────────
 
