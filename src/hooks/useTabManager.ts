@@ -1,11 +1,8 @@
 /**
  * src/hooks/useTabManager.ts
- *
- * 複数PSDファイルのタブ管理フック。
- * 各タブは独立した psd / 履歴スタック / UI状態を保持する。
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Psd } from 'ag-psd';
 
 export interface TabState {
@@ -55,10 +52,19 @@ export function useTabManager() {
     const [tabs, setTabs] = useState<TabState[]>([makeEmptyTab()]);
     const [activeId, setActiveId] = useState<string>(tabs[0].id);
 
+    // tabs の最新参照を ref で保持（コールバック内から安全に参照するため）
+    const tabsRef = useRef(tabs);
+    useEffect(() => { tabsRef.current = tabs; }, [tabs]);
+
     const activeTab = tabs.find(t => t.id === activeId) ?? tabs[0];
 
     const updateTab = useCallback((id: string, patch: Partial<TabState>) => {
         setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
+    }, []);
+
+    // 最新の tabs から特定タブを取得（コールバック内で使用）
+    const getTab = useCallback((id: string): TabState | null => {
+        return tabsRef.current.find(t => t.id === id) ?? null;
     }, []);
 
     const openNewTab = useCallback((overrides?: Partial<TabState>): string => {
@@ -69,24 +75,17 @@ export function useTabManager() {
     }, []);
 
     const activateExistingTab = useCallback((filePath: string): boolean => {
-        const existing = tabs.find(t => t.filePath === filePath);
+        const existing = tabsRef.current.find(t => t.filePath === filePath);
         if (existing) {
             setActiveId(existing.id);
             return true;
         }
         return false;
-    }, [tabs]);
+    }, []);
 
-    /**
-     * タブを閉じる。
-     * 最後の1枚のときは id を保持したまま中身だけ Untitled にリセットする。
-     * id を変えると activeId も変わり、PsdEditor の useLayoutEffect が
-     * 「タブ切り替え」と誤解釈して表示バグ・クラッシュの原因になるため。
-     */
     const closeTab = useCallback((id: string) => {
         setTabs(prev => {
             if (prev.length === 1) {
-                // id はそのまま保持し、中身だけ空にリセット
                 const reset: TabState = {
                     ...makeEmptyTab(),
                     id: prev[0].id,
@@ -145,6 +144,8 @@ export function useTabManager() {
         tabs,
         activeId,
         activeTab,
+        tabsRef,
+        getTab,
         setActiveId,
         openNewTab,
         activateExistingTab,

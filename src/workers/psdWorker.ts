@@ -15,7 +15,6 @@ export interface WorkerRequest {
 
 export interface LayerThumbEntry {
     key: string;
-    /** 描画用 + サムネイル用を兼ねるフルサイズ ImageBitmap */
     bitmap: ImageBitmap;
     left: number;
     top: number;
@@ -91,11 +90,10 @@ async function collectLayerBitmaps(
 
     layers.forEach((layer, i) => {
         const key = [...parentPath, i].join('-');
-        // グループレイヤー（children あり）は bitmap 不要 → スキップ
         if (layer.canvas && !layer.children?.length) {
             const canvas = layer.canvas as OffscreenCanvas;
             const left = layer.left ?? 0;
-            const top = layer.top ?? 0;
+            const top  = layer.top  ?? 0;
             directTasks.push(
                 canvasToBitmaps(canvas)
                     .then(({ bitmap }) => ({ key, bitmap, left, top }))
@@ -137,7 +135,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         // OffscreenCanvas を除去してから postMessage
         if (psd.children) stripCanvas(psd.children);
         if ('canvas' in (psd as any)) delete (psd as any).canvas;
-        // 取りこぼした OffscreenCanvas が残っていると postMessage が失敗するので全体を走査
         stripOffscreenCanvasDeep(psd);
 
         const transferables: Transferable[] = layers.map((e) => e.bitmap);

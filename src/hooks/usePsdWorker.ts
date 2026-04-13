@@ -1,89 +1,83 @@
-import { useCallback } from 'react';
-import { readPsd, initializeCanvas } from 'ag-psd';
+/**
+ * src/hooks/usePsdWorker.ts
+ *
+ * PSD の解析と ImageBitmap 生成を Web Worker で行う。
+ * メインスレッドのブロックを防ぎ、大きな PSD でも UI が固まらない。
+ */
+
+import { useRef, useEffect, useCallback } from 'react';
 import type { Psd } from 'ag-psd';
-import type { LayerThumbEntry } from '../utils/psdUtils';
+import type { WorkerRequest, WorkerResponse, LayerThumbEntry } from '../workers/psdWorker';
 
-initializeCanvas(
-    (width: number, height: number) => new OffscreenCanvas(width, height) as any,
-);
+// Vite の ?worker サフィックスで Worker をバンドル
+import PsdWorker from '../workers/psdWorker?worker';
 
-export interface WorkerResponse {
-    id: number;
+export interface PsdLoadResult {
     psd: Psd;
     layers: LayerThumbEntry[];
-    error?: string;
 }
-
-// ── サムネイル生成ヘルパー ────────────────────────────────────────────────────
-
-async function collectLayerBitmaps(
-    layers: any[],
-    parentPath: number[] = [],
-): Promise<LayerThumbEntry[]> {
-    const results: LayerThumbEntry[] = [];
-
-    for (let i = 0; i < layers.length; i++) {
-        const layer = layers[i];
-        const key = [...parentPath, i].join('-');
-
-        // グループレイヤーはビットマップ不要、子を再帰処理
-        if (layer.children?.length) {
-            const childEntries = await collectLayerBitmaps(layer.children, [...parentPath, i]);
-            results.push(...childEntries);
-            continue;
-        }
-
-        // canvas プロパティがある葉レイヤーのみ処理
-        const canvas = layer.canvas as OffscreenCanvas | HTMLCanvasElement | undefined;
-        if (!canvas) continue;
-
-        try {
-            const bitmap = await createImageBitmap(canvas);
-            results.push({
-                key,
-                bitmap,
-                left: layer.left ?? 0,
-                top:  layer.top  ?? 0,
-            });
-        } catch {
-            // ビットマップ生成失敗は無視してスキップ
-        }
-    }
-
-    return results;
-}
-
-function stripCanvas(layers: any[]): void {
-    for (const layer of layers) {
-        if ('canvas' in layer) delete layer.canvas;
-        if (layer.children?.length) stripCanvas(layer.children);
-    }
-}
-
-// ── hook ──────────────────────────────────────────────────────────────────────
 
 export function usePsdWorker() {
-    const loadPsd = useCallback(
-        async (buffer: ArrayBuffer, _filePath?: string): Promise<WorkerResponse> => {
-            try {
-                const psd = readPsd(new Uint8Array(buffer), {
-                    skipLayerImageData: false,
-                    skipCompositeImageData: false,
-                });
+    const workerRef    = useRef<Worker | null>(null);
+    const pendingRef   = useRef<Map<number, {
+        resolve: (result: PsdLoadResult) => void;
+        reject:  (err: Error) => void;
+    }>>(new Map());
+    const nextIdRef    = useRef(0);
 
-                // canvas が生きているうちにビットマップを収集
-                const layers = psd.children
-                    ? await collectLayerBitmaps(psd.children)
-                    : [];
+    // Worker を初期化
+    useEffect(() => {
+        const worker = new PsdWorker();
 
-                // canvas は postMessage / React state に渡す前に除去
-                if (psd.children) stripCanvas(psd.children);
-                if ('canvas' in (psd as any)) delete (psd as any).canvas;
+        worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+            const { id, psd, layers, error } = event.data;
+            const pending = pendingRef.current.get(id);
+            if (!pending) return;
+            pendingRef.current.delete(id);
 
-                return { id: 0, psd, layers };
-            } catch (err) {
-                throw new Error(err instanceof Error ? err.message : String(err));
+            if (error) {
+                pending.reject(new Error(error));
+            } else {
+                pending.resolve({ psd, layers });
             }
+        };
+
+        worker.onerror = (event: ErrorEvent) => {
+            // Worker 自体がクラッシュした場合、全ての pending を reject
+            const err = new Error(event.message ?? 'Worker error');
+            pendingRef.current.forEach(({ reject }) => reject(err));
+            pendingRef.current.clear();
+        };
+
+        workerRef.current = worker;
+
+        return () => {
+            // pending があれば全て reject してから terminate
+            pendingRef.current.forEach(({ reject }) =>
+                reject(new Error('Worker terminated'))
+            );
+            pendingRef.current.clear();
+            worker.terminate();
+            workerRef.current = null;
+        };
+    }, []);
+
+    const loadPsd = useCallback(
+        (buffer: ArrayBuffer, _filePath?: string): Promise<PsdLoadResult> => {
+            return new Promise((resolve, reject) => {
+                const worker = workerRef.current;
+                if (!worker) {
+                    reject(new Error('Worker not initialized'));
+                    return;
+                }
+
+                const id = nextIdRef.current++;
+                pendingRef.current.set(id, { resolve, reject });
+
+                const request: WorkerRequest = { id, buffer };
+                // buffer を Transferable として渡すことでコピーなしに転送
+                worker.postMessage(request, [buffer]);
+            });
         },
         [],
     );
