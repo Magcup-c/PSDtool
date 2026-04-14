@@ -1,5 +1,10 @@
 /**
  * src/PsdEditor.tsx
+ *
+ * [FIX 1] タブ切り替え時に searchQuery・zoomInputActive をリセット
+ * [FIX 2] タブ切り替え時に renameSessionRef / renameTimer をリセット
+ * [FIX 3] タブ切り替え時にドラッグ残存リスナーを確実に解除
+ * [FIX 4] handleCloseTab でも zoomInputActive をリセット
  */
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
@@ -336,6 +341,7 @@ const PsdEditor = () => {
     const outgoingUiRef   = useRef({ zoom, flipX, flipY, closedKeys: Array.from(closedKeys) });
     outgoingUiRef.current = { zoom, flipX, flipY, closedKeys: Array.from(closedKeys) };
 
+    // [FIX 1,2,3] タブ切り替え時に各種状態を正しくリセット
     useLayoutEffect(() => {
         const prevId = prevActiveIdRef.current;
         if (prevId === activeId) return;
@@ -351,11 +357,36 @@ const PsdEditor = () => {
         const nextTab = tabsRef.current.find(t => t.id === activeId);
         if (!nextTab) return;
 
+        // [FIX 3] ドラッグ中にタブを切り替えた場合、残存リスナーを解除してステートをリセット
+        if (layerDragCleanupRef.current) {
+            layerDragCleanupRef.current();
+            layerDragCleanupRef.current = null;
+            setDraggingPath(null);
+            setDropTarget(null);
+        }
+        if (favoriteDragCleanupRef.current) {
+            favoriteDragCleanupRef.current();
+            favoriteDragCleanupRef.current = null;
+            setFavoriteDrop(null);
+        }
+
+        // [FIX 2] 前タブのリネームセッションを確実にリセット
+        renameSessionRef.current = false;
+        if (renameTimerRef.current) {
+            clearTimeout(renameTimerRef.current);
+            renameTimerRef.current = null;
+        }
+
         resetHistory(nextTab.psd);
         setCurrentFilePath(nextTab.filePath);
         setFlipX(nextTab.flipX);
         setFlipY(nextTab.flipY);
         setClosedKeys(new Set(nextTab.closedKeys));
+
+        // [FIX 1] タブをまたいで検索文字列・ズーム入力状態が残らないようにリセット
+        setSearchQuery('');
+        setZoomInputActive(false);
+
         isFirstLoadRef.current = true;
         setZoomTo(nextTab.zoom);
         const el = scrollRef.current;
@@ -427,6 +458,7 @@ const PsdEditor = () => {
         setClosedKeys(new Set());
     }, [tabManager, resetHistory]);
 
+    // [FIX 4] タブを閉じる際にも zoomInputActive をリセット
     const handleCloseTab = useCallback((id: string) => {
         loadGenByTabRef.current.delete(id);
 
@@ -437,6 +469,7 @@ const PsdEditor = () => {
             setFlipY(false);
             setClosedKeys(new Set());
             setSearchQuery('');
+            setZoomInputActive(false);  // [FIX 4]
         }
 
         startTransition(() => { tabManager.closeTab(id); });
@@ -488,7 +521,7 @@ const PsdEditor = () => {
         } catch (err) { showToast(`${L.openFailed}: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
     }, [openPsdUnified, showToast, L]);
 
-    // ── クリップボードコピー（キーボードショートカットより前に定義）────────────
+    // ── クリップボードコピー ──────────────────────────────────────────────────
 
     const handleCopyCanvas = useCallback(async () => {
         const canvas = canvasRef.current;

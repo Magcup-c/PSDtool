@@ -1,5 +1,7 @@
 /**
  * src/hooks/useTabManager.ts
+ * [FIX] closeTab のレースコンディション修正:
+ *       setActiveId を setTabs の外に分離し、tabsRef から安全に参照する
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -52,7 +54,6 @@ export function useTabManager() {
     const [tabs, setTabs] = useState<TabState[]>([makeEmptyTab()]);
     const [activeId, setActiveId] = useState<string>(tabs[0].id);
 
-    // tabs の最新参照を ref で保持（コールバック内から安全に参照するため）
     const tabsRef = useRef(tabs);
     useEffect(() => { tabsRef.current = tabs; }, [tabs]);
 
@@ -62,7 +63,6 @@ export function useTabManager() {
         setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
     }, []);
 
-    // 最新の tabs から特定タブを取得（コールバック内で使用）
     const getTab = useCallback((id: string): TabState | null => {
         return tabsRef.current.find(t => t.id === id) ?? null;
     }, []);
@@ -83,22 +83,26 @@ export function useTabManager() {
         return false;
     }, []);
 
+    // [FIX] setActiveId を setTabs の外に出してレースコンディションを解消。
+    // setTabs と setActiveId は同じバッチで処理されるが、
+    // setActiveId のコールバックは tabsRef（最新値）を参照するため安全。
     const closeTab = useCallback((id: string) => {
         setTabs(prev => {
             if (prev.length === 1) {
-                const reset: TabState = {
-                    ...makeEmptyTab(),
-                    id: prev[0].id,
-                };
-                return [reset];
+                // タブが1枚だけの場合はリセット（閉じずに空にする）
+                return [{ ...makeEmptyTab(), id: prev[0].id }];
             }
+            return prev.filter(t => t.id !== id);
+        });
+
+        setActiveId(cur => {
+            if (cur !== id) return cur;
+            const prev = tabsRef.current;
+            // 1枚の場合は同じIDのまま（makeEmptyTab で id を引き継ぐため）
+            if (prev.length === 1) return prev[0].id;
             const next = prev.filter(t => t.id !== id);
-            setActiveId(cur => {
-                if (cur !== id) return cur;
-                const closedIdx = prev.findIndex(t => t.id === id);
-                return next[Math.min(closedIdx, next.length - 1)].id;
-            });
-            return next;
+            const closedIdx = prev.findIndex(t => t.id === id);
+            return next[Math.min(closedIdx, next.length - 1)].id;
         });
     }, []);
 

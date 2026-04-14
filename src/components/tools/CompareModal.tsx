@@ -2,9 +2,10 @@
  * src/components/tools/CompareModal.tsx
  *
  * 2つのPSDを比較してDiff画像を生成するモーダル。
+ * [FIX] Escape キーで閉じる処理を追加
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { X, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-react';
@@ -76,6 +77,13 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
     const [running,   setRunning]   = useState(false);
     const [result,    setResult]    = useState<CompareResult | null>(null);
     const [error,     setError]     = useState('');
+
+    // [FIX] Escape で閉じる
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [onClose]);
 
     const pickFile = useCallback(async (setter: (v: string) => void) => {
         const f = await open({ multiple: false, filters: [{ name: 'PSD', extensions: ['psd'] }] });
