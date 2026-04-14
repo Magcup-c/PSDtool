@@ -9,8 +9,7 @@
  *       PSD ツリーの layer._thumb に注入する純粋関数。
  */
 
-import { Psd } from 'ag-psd';
-import { SearchResult } from '../types';
+import { PsdLayerNode, SearchResult, PsdRoot } from '../types';
 
 export interface LayerThumbEntry {
     key: string;
@@ -19,9 +18,12 @@ export interface LayerThumbEntry {
     top: number;
 }
 
-export function getLayersAtPath(children: any[], parentPath: number[]): any[] {
+export function getLayersAtPath(children: PsdLayerNode[], parentPath: number[]): PsdLayerNode[] {
     let current = children;
-    for (const idx of parentPath) current = current[idx].children;
+    for (const idx of parentPath) {
+        if (!current[idx].children) return current;
+        current = current[idx].children!;
+    }
     return current;
 }
 
@@ -34,10 +36,10 @@ export function getLayersAtPath(children: any[], parentPath: number[]): any[] {
  * layer オブジェクト自体を新しい参照に置き換えるため、
  * React.memo のキャッシュが正しく無効化されてサムネイルが再描画される。
  */
-export function attachThumbs(psd: Psd, entries: LayerThumbEntry[]): Psd {
+export function attachThumbs(psd: PsdRoot, entries: LayerThumbEntry[]): PsdRoot {
     const map = new Map(entries.map((e) => [e.key, e]));
 
-    function walk(nodes: any[], parentPath: number[]): any[] {
+    function walk(nodes: PsdLayerNode[], parentPath: number[]): PsdLayerNode[] {
         return nodes.map((layer, i) => {
             const key = [...parentPath, i].join('-');
             const entry = map.get(key);
@@ -51,14 +53,14 @@ export function attachThumbs(psd: Psd, entries: LayerThumbEntry[]): Psd {
         });
     }
 
-    return { ...psd, children: walk(psd.children ?? [], []) };
+    return { ...psd, children: walk(psd.children ?? [], []) } as any;
 }
 
 export function updateLayerByPath(
-    psd: Psd,
+    psd: PsdRoot,
     path: number[],
-    update: (layer: any) => any,
-): Psd {
+    update: (layer: PsdLayerNode) => PsdLayerNode,
+): PsdRoot {
     const newPsd = { ...psd };
     if (!newPsd.children) return newPsd;
     newPsd.children = [...newPsd.children];
@@ -78,7 +80,7 @@ export function updateLayerByPath(
 }
 
 export function collectSearchResults(
-    layers: any[],
+    layers: PsdLayerNode[],
     query: string,
     parentPath: number[] = [],
 ): SearchResult[] {

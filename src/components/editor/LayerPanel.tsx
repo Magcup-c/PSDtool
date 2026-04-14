@@ -6,13 +6,12 @@ import {
 } from 'lucide-react';
 import { SearchResultRow } from '../SearchResultRow';
 import { VirtualLayerList, flattenLayers } from '../../VirtualLayerList';
-import { DropTargetInfo, SearchResult } from '../../types';
+import { DropTargetInfo, SearchResult, PsdRoot, PsdLayerNode, LocaleStrings } from '../../types';
 import { LayerFavorite, exportFavoritesToJson, importFavoritesFromJson } from '../../hooks/useLayerFavorites';
-import { Psd } from 'ag-psd';
 
 interface LayerPanelProps {
     width: number;
-    psd: Psd | null;
+    psd: PsdRoot | null;
     isLoading: boolean;
     searchResults: SearchResult[] | null;
     searchQuery: string;
@@ -28,7 +27,7 @@ interface LayerPanelProps {
     handleToggleExpand: (key: string) => void;
     toggleLayerVisibility: (path: number[]) => void;
     renameLayer: (path: number[], name: string) => void;
-    toggleRadioLayer: (path: number[], siblings: any[]) => void;
+    toggleRadioLayer: (path: number[], siblings: PsdLayerNode[]) => void;
     handleDeleteLayer: (path: number[]) => void;
     handleLayerDragStart: (e: React.MouseEvent, path: number[]) => void;
     draggingPath: number[] | null;
@@ -49,7 +48,7 @@ interface LayerPanelProps {
     layerScrollRef: React.RefObject<HTMLDivElement | null>;
     formatFavoriteTime: (ts: number, lang: 'ja' | 'en') => string;
     lang: 'ja' | 'en';
-    L: any;
+    L: LocaleStrings;
     // 追加
     importFavorites: (incoming: LayerFavorite[], mode: 'merge' | 'replace') => void;
     onExportFavoriteImage: (fav: LayerFavorite) => void;

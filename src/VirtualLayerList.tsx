@@ -10,12 +10,12 @@ import {
     Image as ImageIcon, Folder as FolderIcon,
     Trash2, GripVertical,
 } from 'lucide-react';
-import type { DropTargetInfo } from './types';
+import type { DropTargetInfo, PsdLayerNode } from './types';
 
 export interface FlatLayer {
-    layer: any;
+    layer: PsdLayerNode;
     path: number[];
-    siblings: any[];
+    siblings: PsdLayerNode[];
     depth: number;
     hasChildren: boolean;
     isOpen: boolean;
@@ -28,7 +28,7 @@ interface VirtualLayerListProps {
     lockedEnabled: boolean;
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
-    onRadioSelect: (path: number[], siblings: any[]) => void;
+    onRadioSelect: (path: number[], siblings: PsdLayerNode[]) => void;
     onToggleExpand: (key: string) => void;
     onDelete: (path: number[]) => void;
     onDragStart: (e: React.MouseEvent, path: number[]) => void;
@@ -92,7 +92,7 @@ interface LayerRowProps {
     lockedEnabled: boolean;
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
-    onRadioSelect: (path: number[], siblings: any[]) => void;
+    onRadioSelect: (path: number[], siblings: PsdLayerNode[]) => void;
     onToggleExpand: (key: string) => void;
     onDelete: (path: number[]) => void;
     onDragStart: (e: React.MouseEvent, path: number[]) => void;
@@ -354,13 +354,13 @@ VirtualLayerListInner.displayName = 'VirtualLayerList';
 export const VirtualLayerList = VirtualLayerListInner;
 
 export function flattenLayers(
-    layers: any[],
+    layers: PsdLayerNode[],
     closedKeys: Set<string>,
     flipEnabled: boolean,
     hasFlipSuffix: (name: string) => boolean,
     parentPath: number[] = [],
     depth: number = 0,
-    siblings?: any[],
+    siblings?: PsdLayerNode[],
 ): FlatLayer[] {
     const result: FlatLayer[] = [];
     const actualSiblings = siblings ?? layers;
@@ -378,8 +378,8 @@ export function flattenLayers(
 
         if (hasChildren && isOpen) {
             result.push(...flattenLayers(
-                layer.children, closedKeys, flipEnabled, hasFlipSuffix,
-                path, depth + 1, layer.children,
+                layer.children || [], closedKeys, flipEnabled, hasFlipSuffix,
+                path, depth + 1, layer.children || [],
             ));
         }
     });

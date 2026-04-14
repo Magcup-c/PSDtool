@@ -1,16 +1,16 @@
 import React from 'react';
 import { Monitor } from 'lucide-react';
-import { Psd } from 'ag-psd';
+import { PsdRoot, LocaleStrings } from '../../types';
 
 interface PreviewAreaProps {
     activeTabId: string;
-    psd: Psd | null;
+    psd: PsdRoot | null;
     isLoading: boolean;
     scrollRef: React.RefObject<HTMLDivElement | null>;
     canvasContainerRef: React.RefObject<HTMLDivElement | null>;
     canvasRef: React.RefObject<HTMLCanvasElement | null>;
     SCROLL_AREA: number;
-    L: any;
+    L: LocaleStrings;
 }
 
 export const PreviewArea: React.FC<PreviewAreaProps> = ({

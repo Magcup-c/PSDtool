@@ -1,12 +1,12 @@
 import React, { memo, useCallback } from 'react';
 import { Eye, EyeOff, ChevronDown, ChevronRight, Trash2, GripVertical } from 'lucide-react';
-import { DropTargetInfo } from '../types';
+import { DropTargetInfo, PsdLayerNode } from '../types';
 import { LayerThumbnail } from './LayerThumbnail';
 
 interface LayerItemProps {
-    layer: any;
+    layer: PsdLayerNode;
     path: number[];
-    siblings: any[];
+    siblings: PsdLayerNode[];
     radioEnabled: boolean;
     lockedEnabled: boolean;
     flipEnabled: boolean;
@@ -14,7 +14,7 @@ interface LayerItemProps {
     onToggleExpand: (key: string) => void;
     onToggle: (path: number[]) => void;
     onRename: (path: number[], newName: string) => void;
-    onRadioSelect: (path: number[], siblings: any[]) => void;
+    onRadioSelect: (path: number[], siblings: PsdLayerNode[]) => void;
     onDelete: (path: number[]) => void;
     onDragStart: (e: React.MouseEvent, path: number[]) => void;
     draggingPath: number[] | null;
@@ -147,8 +147,8 @@ export const LayerItem = memo(({
 
             {hasChildren && !isClosed && (
                 <ul className="sub-layers">
-                    {[...(layer.children || [])].reverse().map((child: any, i: number) => {
-                        const originalIndex = (layer.children.length - 1) - i;
+                    {[...(layer.children || [])].reverse().map((child: PsdLayerNode, i: number) => {
+                        const originalIndex = ((layer.children || []).length - 1) - i;
                         const childPath = [...path, originalIndex];
                         const childKey  = childPath.join('-');
                         if (flipEnabled && hasFlipSuffix(child.name || '')) return null;
@@ -157,7 +157,7 @@ export const LayerItem = memo(({
                                 key={childKey}
                                 layer={child}
                                 path={childPath}
-                                siblings={layer.children}
+                                siblings={layer.children || []}
                                 radioEnabled={radioEnabled}
                                 lockedEnabled={lockedEnabled}
                                 flipEnabled={flipEnabled}

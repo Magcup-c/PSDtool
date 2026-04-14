@@ -1,5 +1,6 @@
 import React from 'react';
 import { X } from 'lucide-react';
+import { LocaleStrings } from '../../types';
 
 interface FavoriteModalProps {
     favoriteDialog: { mode: 'create' | 'rename'; id?: string; value: string };
@@ -7,7 +8,7 @@ interface FavoriteModalProps {
     confirmFavoriteDialog: () => void;
     favoriteInputRef: React.RefObject<HTMLInputElement | null>;
     setFavoriteDialog: React.Dispatch<React.SetStateAction<{ mode: 'create' | 'rename'; id?: string; value: string } | null>>;
-    L: any;
+    L: LocaleStrings;
 }
 
 export const FavoriteModal: React.FC<FavoriteModalProps> = ({

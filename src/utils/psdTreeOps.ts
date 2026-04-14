@@ -1,18 +1,20 @@
+import { PsdRoot, PsdLayerNode } from '../types';
+
 /**
  * PSDのレイヤーツリー内でレイヤーを移動させる
  */
-export function moveLayer(psd: any, srcPath: number[], dstPath: number[], position: 'before' | 'after' | 'inside'): any | null {
+export function moveLayer(psd: PsdRoot, srcPath: number[], dstPath: number[], position: 'before' | 'after' | 'inside'): PsdRoot | null {
     if (!psd?.children) return null;
 
     // イミュータビリティを維持するためにツリーをクローン
-    const cloneTree = (layers: any[]): any[] =>
+    const cloneTree = (layers: PsdLayerNode[]): PsdLayerNode[] =>
         layers.map(l => ({ ...l, children: l.children ? cloneTree(l.children) : undefined }));
 
-    const getLayerArray = (children: any[], path: number[]) => {
+    const getLayerArray = (children: PsdLayerNode[], path: number[]) => {
         let current = children;
         for (const i of path) {
             if (!current[i].children) current[i].children = [];
-            current = current[i].children;
+            current = current[i].children!;
         }
         return current;
     };

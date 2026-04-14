@@ -5,13 +5,13 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Psd } from 'ag-psd';
+import { PsdRoot } from '../types';
 
 export interface TabState {
     id: string;
     filePath: string | null;
     fileName: string;
-    psd: Psd | null;
+    psd: PsdRoot | null;
     isDirty: boolean;
     isLoading: boolean;
     zoom: number;
@@ -106,7 +106,7 @@ export function useTabManager() {
         });
     }, []);
 
-    const setActivePsd = useCallback((psd: Psd | null, filePath?: string | null) => {
+    const setActivePsd = useCallback((psd: PsdRoot | null, filePath?: string | null) => {
         setTabs(prev => prev.map(t => {
             if (t.id !== activeId) return t;
             return {

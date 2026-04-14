@@ -6,12 +6,12 @@ import {
 } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { FileMenu } from '../FileMenu';
-import { ToolsMenu } from '../ToolsMenu';   // ← 追加
-import { Psd } from 'ag-psd';
+import { ToolsMenu } from '../ToolsMenu';
+import { PsdRoot, LocaleStrings } from '../../types';
 import { RecentFile } from '../../hooks/useRecentFiles';
 
 interface EditorHeaderProps {
-    psd: Psd | null;
+    psd: PsdRoot | null;
     recentFiles: RecentFile[];
     handleOpenFile: () => void;
     loadPsdFromFilePath: (path: string) => void;
@@ -39,7 +39,7 @@ interface EditorHeaderProps {
     setZoomInputActive: (val: boolean) => void;
     exportButtonLabel: string;
     exportAriaLabel: string;
-    L: any;
+    L: LocaleStrings;
 }
 
 export const EditorHeader: React.FC<EditorHeaderProps> = ({

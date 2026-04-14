@@ -3,6 +3,7 @@
  */
 
 import { readPsd, initializeCanvas, Psd } from 'ag-psd';
+import { PsdLayerNode } from '../types';
 
 initializeCanvas(
     (width: number, height: number) => new OffscreenCanvas(width, height) as any,
@@ -27,9 +28,9 @@ export interface WorkerResponse {
     error?: string;
 }
 
-function normalizeRadioGroups(layers: any[]): any[] {
+function normalizeRadioGroups(layers: PsdLayerNode[]): PsdLayerNode[] {
     const processed = layers.map((layer) =>
-        layer.children?.length > 0
+        layer.children && layer.children.length > 0
             ? { ...layer, children: normalizeRadioGroups(layer.children) }
             : layer,
     );
@@ -47,7 +48,7 @@ function normalizeRadioGroups(layers: any[]): any[] {
     return normalized;
 }
 
-function stripCanvas(layers: any[]): void {
+function stripCanvas(layers: PsdLayerNode[]): void {
     for (const layer of layers) {
         if ('canvas' in layer) delete layer.canvas;
         if (layer.children?.length) stripCanvas(layer.children);
@@ -82,7 +83,7 @@ async function canvasToBitmaps(
 }
 
 async function collectLayerBitmaps(
-    layers: any[],
+    layers: PsdLayerNode[],
     parentPath: number[] = [],
 ): Promise<LayerThumbEntry[]> {
     const directTasks: Promise<LayerThumbEntry | null>[] = [];
