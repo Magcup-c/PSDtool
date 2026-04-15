@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { updateLayerByPath } from '../utils/psdUtils';
+import { updateLayerByPath, collectBitmaps, closeBitmaps } from '../utils/psdUtils';
 import { PsdLayerNode, PsdRoot } from '../types';
 
 export function usePsdHistory(initialPsd: PsdRoot | null) {
@@ -9,22 +9,70 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
     const redoStack = useRef<PsdRoot[]>([]);
     const psdRef = useRef<PsdRoot | null>(null);
 
+    // 現在使用中の全ビットマップを追跡（リーク防止用）
+    const activeBitmapsRef = useRef<Set<ImageBitmap>>(new Set());
+
+    const MAX_UNDO = 50;
+
+    /**
+     *Undo/Redoスタック、および現在のPSDから参照されていないビットマップを特定して解放する。
+     */
+    const cleanupResources = useCallback(() => {
+        const currentInUse = new Set<ImageBitmap>();
+        
+        // 現在のPSD
+        collectBitmaps(psdRef.current).forEach(b => currentInUse.add(b));
+        // Undoスタック
+        undoStack.current.forEach(item => {
+            collectBitmaps(item).forEach(b => currentInUse.add(b));
+        });
+        // Redoスタック
+        redoStack.current.forEach(item => {
+            collectBitmaps(item).forEach(b => currentInUse.add(b));
+        });
+
+        // 以前は保持していたが、現在はどこからも参照されていないものを探す
+        const toClose: ImageBitmap[] = [];
+        activeBitmapsRef.current.forEach(b => {
+            if (!currentInUse.has(b)) toClose.push(b);
+        });
+
+        if (toClose.length > 0) {
+            closeBitmaps(toClose);
+        }
+        activeBitmapsRef.current = currentInUse;
+    }, []);
+
     useEffect(() => {
         psdRef.current = psd;
     }, [psd]);
 
-    const MAX_UNDO = 50;
+    // アンマウント時に全リソース解放
+    useEffect(() => {
+        return () => {
+            closeBitmaps(activeBitmapsRef.current);
+            activeBitmapsRef.current.clear();
+        };
+    }, []);
 
     const syncHistoryState = useCallback(() => {
         setHistoryState({
             canUndo: undoStack.current.length > 0,
             canRedo: redoStack.current.length > 0,
         });
-    }, []);
+        // 状態変更のたびに不要なリソースをクリーンアップ
+        cleanupResources();
+    }, [cleanupResources]);
 
     const commitPsd = useCallback((nextLevelPsd: PsdRoot) => {
         const current = psdRef.current;
-        if (!current) return;
+        if (!current) {
+            psdRef.current = nextLevelPsd;
+            setPsd(nextLevelPsd);
+            syncHistoryState();
+            return;
+        }
+        // 古いスタックの末尾が消える場合は cleanupResources で処理される
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), current];
         redoStack.current = [];
         psdRef.current = nextLevelPsd;
@@ -57,7 +105,7 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
         const next = redoStack.current.pop()!;
         psdRef.current = next;
         setPsd(next);
-        syncHistoryState(); // ✅ 重複していた2回目の呼び出しを削除
+        syncHistoryState();
     }, [syncHistoryState]);
 
     const toggleRadioLayer = useCallback((path: number[], siblings: PsdLayerNode[]) => {

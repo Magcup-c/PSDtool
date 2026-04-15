@@ -125,3 +125,33 @@ export function throttle<T extends (...args: any[]) => void>(
         }
     }) as T;
 }
+
+/**
+ * PSDツリー内にある全ての ImageBitmap を収集する。
+ */
+export function collectBitmaps(psd: PsdRoot | null): Set<ImageBitmap> {
+    const bitmaps = new Set<ImageBitmap>();
+    if (!psd) return bitmaps;
+
+    function walk(nodes: PsdLayerNode[]) {
+        for (const node of nodes) {
+            if (node._bitmap) bitmaps.add(node._bitmap);
+            if (node.children) walk(node.children);
+        }
+    }
+    if (psd.children) walk(psd.children);
+    return bitmaps;
+}
+
+/**
+ * 指定したビットマップ集合を全て close() する。
+ */
+export function closeBitmaps(bitmaps: Iterable<ImageBitmap>) {
+    for (const b of bitmaps) {
+        try {
+            b.close();
+        } catch (e) {
+            console.warn('Failed to close ImageBitmap:', e);
+        }
+    }
+}
