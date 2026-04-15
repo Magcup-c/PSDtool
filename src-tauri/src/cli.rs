@@ -132,23 +132,39 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
     println!("Exporting layers from '{}' → '{}'\n", input, output_dir);
 
     for layer in psd.layers() {
-        let name = sanitize_name(layer.name());
-
         if visible_only && !layer.visible() { skipped += 1; continue; }
 
-        let pixel_data: Vec<u8> = layer.rgba();
+        let layer_name = sanitize_name(layer.name());
         let (w, h) = (layer.width() as u32, layer.height() as u32);
         if w == 0 || h == 0 { skipped += 1; continue; }
+
+        // psd crate 0.3.5 の PsdLayer::rgba() を取得
+        let mut pixel_data = layer.rgba();
+
+        // 【重要】psd crate 0.3.x の一部のバグにより、layer.rgba() がインターリーブ形式ではなく
+        // 平面形式 (RRR...GGG...BBB...AAA...) でデータを返してしまうことがある。
+        // これが原因で出力が「ノイズ」に見えるため、正しい順番に並べ替える（インターリーブ処理）。
+        if pixel_data.len() == (w * h * 4) as usize {
+            let width = w as usize;
+            let height = h as usize;
+            let planar = pixel_data.clone();
+            for i in 0..(width * height) {
+                pixel_data[i * 4]     = planar[i];
+                pixel_data[i * 4 + 1] = planar[i + width * height];
+                pixel_data[i * 4 + 2] = planar[i + 2 * width * height];
+                pixel_data[i * 4 + 3] = planar[i + 3 * width * height];
+            }
+        }
 
         let img = match image::RgbaImage::from_raw(w, h, pixel_data) {
             Some(i) => i,
             None    => { skipped += 1; continue; }
         };
 
-        let mut out_path = Path::new(output_dir).join(format!("{}.{}", name, ext));
+        let mut out_path = Path::new(output_dir).join(format!("{}.{}", layer_name, ext));
         let mut idx = 1u32;
         while out_path.exists() {
-            out_path = Path::new(output_dir).join(format!("{}_{}.{}", name, idx, ext));
+            out_path = Path::new(output_dir).join(format!("{}_{}.{}", layer_name, idx, ext));
             idx += 1;
         }
 

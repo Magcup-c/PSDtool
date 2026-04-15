@@ -1,13 +1,14 @@
 /**
  * src/components/tools/SpriteModal.tsx
- *
- * 修正: Escape キーで閉じる useEffect を追加
+ * 追加: useToolProgress + ToolLogPanel で進捗ログを表示
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { X, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useToolProgress } from '../../hooks/useToolProgress';
+import { ToolLogPanel } from './ToolLogPanel';
 
 interface Props {
     language: 'ja' | 'en';
@@ -78,7 +79,8 @@ export const SpriteModal = ({ language, onClose }: Props) => {
     const [result,     setResult]     = useState<SpriteResult | null>(null);
     const [error,      setError]      = useState('');
 
-    // ✅ 追加: Escape で閉じる（他のツールモーダルと統一）
+    const { logs, clearLogs } = useToolProgress(running);
+
     useEffect(() => {
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', handler);
@@ -99,7 +101,10 @@ export const SpriteModal = ({ language, onClose }: Props) => {
     const run = useCallback(async () => {
         if (!inputDir) { setError(t.noInput);  return; }
         if (!output)   { setError(t.noOutput); return; }
-        setError(''); setRunning(true); setResult(null);
+        setError('');
+        clearLogs();
+        setRunning(true);
+        setResult(null);
         const sep = inputDir.includes('\\') ? '\\' : '/';
         const pattern = `${inputDir}${sep}*.psd`;
         const jsonOut = exportJson
@@ -115,7 +120,7 @@ export const SpriteModal = ({ language, onClose }: Props) => {
         } finally {
             setRunning(false);
         }
-    }, [inputDir, output, layout, cols, padding, format, exportJson, t]);
+    }, [inputDir, output, layout, cols, padding, format, exportJson, t, clearLogs]);
 
     const basename = (p: string) => p.replace(/\\/g, '/').split('/').pop() ?? p;
 
@@ -134,7 +139,6 @@ export const SpriteModal = ({ language, onClose }: Props) => {
                 </div>
 
                 <div className="tool-modal-body">
-                    {/* 入力フォルダ */}
                     <div className="tool-field">
                         <label className="tool-label">{t.inputDir}</label>
                         <div className="tool-path-row">
@@ -145,7 +149,6 @@ export const SpriteModal = ({ language, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* 出力ファイル */}
                     <div className="tool-field">
                         <label className="tool-label">{t.output}</label>
                         <div className="tool-path-row">
@@ -156,7 +159,6 @@ export const SpriteModal = ({ language, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* レイアウト */}
                     <div className="tool-field">
                         <label className="tool-label">{t.layout}</label>
                         <div className="tool-format-row">
@@ -173,7 +175,6 @@ export const SpriteModal = ({ language, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* Grid時の列数 */}
                     {layout === 'grid' && (
                         <div className="tool-field">
                             <label className="tool-label">{t.cols}</label>
@@ -189,7 +190,6 @@ export const SpriteModal = ({ language, onClose }: Props) => {
                         </div>
                     )}
 
-                    {/* パディング */}
                     <div className="tool-field">
                         <label className="tool-label">{t.padding}</label>
                         <div className="tool-slider-row">
@@ -203,7 +203,6 @@ export const SpriteModal = ({ language, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* 形式 */}
                     <div className="tool-field">
                         <label className="tool-label">{t.format}</label>
                         <div className="tool-format-row">
@@ -220,7 +219,6 @@ export const SpriteModal = ({ language, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* JSONマップ */}
                     <label className="tool-checkbox-row">
                         <input
                             type="checkbox"
@@ -233,7 +231,10 @@ export const SpriteModal = ({ language, onClose }: Props) => {
 
                     {error && <div className="tool-error"><AlertCircle size={13} /><span>{error}</span></div>}
 
-                    {result && (
+                    {/* 進捗ログ */}
+                    <ToolLogPanel logs={logs} running={running} language={language} />
+
+                    {result && !running && (
                         <div className="tool-result success">
                             <CheckCircle2 size={14} />
                             <div>{t.done(result.width, result.height, result.frame_count)}</div>

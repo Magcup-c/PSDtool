@@ -1,12 +1,14 @@
 /**
  * src/components/tools/BatchModal.tsx
- * 修正: Escape で閉じる
+ * 追加: useToolProgress + ToolLogPanel で進捗ログを表示
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { X, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useToolProgress } from '../../hooks/useToolProgress';
+import { ToolLogPanel } from './ToolLogPanel';
 
 interface Props {
     language: 'ja' | 'en';
@@ -58,7 +60,8 @@ export const BatchModal = ({ language, onClose }: Props) => {
     const [result,    setResult]    = useState<BatchResult | null>(null);
     const [error,     setError]     = useState('');
 
-    // Escape で閉じる
+    const { logs, clearLogs } = useToolProgress(running);
+
     useEffect(() => {
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', handler);
@@ -78,7 +81,10 @@ export const BatchModal = ({ language, onClose }: Props) => {
     const run = useCallback(async () => {
         if (!inputDir)  { setError(t.noInput);  return; }
         if (!outputDir) { setError(t.noOutput); return; }
-        setError(''); setRunning(true); setResult(null);
+        setError('');
+        clearLogs();
+        setRunning(true);
+        setResult(null);
         try {
             const sep = inputDir.includes('\\') ? '\\' : '/';
             const pattern = `${inputDir}${sep}*.psd`;
@@ -89,9 +95,7 @@ export const BatchModal = ({ language, onClose }: Props) => {
         } finally {
             setRunning(false);
         }
-    }, [inputDir, outputDir, format, t]);
-
-    const done = result !== null;
+    }, [inputDir, outputDir, format, t, clearLogs]);
 
     return (
         <div className="tool-modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -136,7 +140,10 @@ export const BatchModal = ({ language, onClose }: Props) => {
 
                     {error && <div className="tool-error"><AlertCircle size={13} /><span>{error}</span></div>}
 
-                    {done && result && (
+                    {/* 進捗ログ */}
+                    <ToolLogPanel logs={logs} running={running} language={language} />
+
+                    {result && !running && (
                         <div className={`tool-result ${result.err === 0 ? 'success' : 'warn'}`}>
                             <CheckCircle2 size={14} />
                             <div>

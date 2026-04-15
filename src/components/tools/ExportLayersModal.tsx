@@ -1,13 +1,14 @@
 /**
  * src/components/tools/ExportLayersModal.tsx
- * 修正: Escape で閉じる
- * 修正 #1: invoke の戻り値型を ExportLayersResult に修正（number → object）
+ * 追加: useToolProgress + ToolLogPanel で進捗ログを表示
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { X, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useToolProgress } from '../../hooks/useToolProgress';
+import { ToolLogPanel } from './ToolLogPanel';
 
 interface Props {
     language: 'ja' | 'en';
@@ -33,6 +34,7 @@ const L = {
         noInput:    '入力ファイルを選択してください',
         noOutput:   '出力フォルダを選択してください',
         errors:     'エラー詳細',
+        visibleOnly: '可視レイヤーのみ',
     },
     en: {
         title:      'Export Layers',
@@ -51,13 +53,13 @@ const L = {
         noInput:    'Please select an input file',
         noOutput:   'Please select an output folder',
         errors:     'Error Details',
+        visibleOnly: 'Visible layers only',
     },
 } as const;
 
 const FORMATS = ['png', 'jpeg', 'webp'] as const;
 type Fmt = typeof FORMATS[number];
 
-// Rust 側の ExportLayersResult と一致させる
 interface ExportLayersResult {
     count: number;
     skipped: number;
@@ -69,16 +71,17 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
     const [inputPath,  setInputPath]  = useState('');
     const [outputDir,  setOutputDir]  = useState('');
     const [format,     setFormat]     = useState<Fmt>('png');
+    const [visibleOnly, setVisibleOnly] = useState(false);
     const [running,    setRunning]    = useState(false);
     const [result,     setResult]     = useState<ExportLayersResult | null>(null);
     const [error,      setError]      = useState('');
 
-    // 既存ファイルがあるなら初期値として利用
+    const { logs, clearLogs } = useToolProgress(running);
+
     useEffect(() => {
         if (!inputPath && currentFilePath) setInputPath(currentFilePath);
     }, [currentFilePath, inputPath]);
 
-    // Escape で閉じる
     useEffect(() => {
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', handler);
@@ -98,11 +101,13 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
     const run = useCallback(async () => {
         if (!inputPath) { setError(t.noInput);  return; }
         if (!outputDir) { setError(t.noOutput); return; }
-        setError(''); setRunning(true); setResult(null);
+        setError('');
+        clearLogs();
+        setRunning(true);
+        setResult(null);
         try {
-            // [FIX #1] 戻り値の型を number から ExportLayersResult に修正
             const res = await invoke<ExportLayersResult>('run_export_layers', {
-                input: inputPath, outputDir, format, visibleOnly: false,
+                input: inputPath, outputDir, format, visibleOnly,
             });
             setResult(res);
         } catch (e) {
@@ -110,7 +115,7 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
         } finally {
             setRunning(false);
         }
-    }, [inputPath, outputDir, format, t]);
+    }, [inputPath, outputDir, format, visibleOnly, t, clearLogs]);
 
     return (
         <div className="tool-modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -152,10 +157,26 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
                             ))}
                         </div>
                     </div>
+                    
+                    <div className="tool-field">
+                        <label className="tool-label" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                            <input
+                                type="checkbox"
+                                checked={visibleOnly}
+                                onChange={e => setVisibleOnly(e.target.checked)}
+                                disabled={running}
+                                style={{ width: 14, height: 14, cursor: 'pointer' }}
+                            />
+                            <span>{t.visibleOnly}</span>
+                        </label>
+                    </div>
 
                     {error && <div className="tool-error"><AlertCircle size={13} /><span>{error}</span></div>}
 
-                    {result !== null && (
+                    {/* 進捗ログ */}
+                    <ToolLogPanel logs={logs} running={running} language={language} />
+
+                    {result !== null && !running && (
                         <div className={`tool-result ${result.errors.length === 0 ? 'success' : 'warn'}`}>
                             <CheckCircle2 size={14} />
                             <div>

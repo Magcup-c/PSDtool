@@ -1,14 +1,14 @@
 /**
  * src/components/tools/CompareModal.tsx
- *
- * 2つのPSDを比較してDiff画像を生成するモーダル。
- * [FIX] Escape キーで閉じる処理を追加
+ * 追加: useToolProgress + ToolLogPanel で進捗ログを表示
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { X, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useToolProgress } from '../../hooks/useToolProgress';
+import { ToolLogPanel } from './ToolLogPanel';
 
 interface Props {
     language: 'ja' | 'en';
@@ -78,7 +78,8 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
     const [result,    setResult]    = useState<CompareResult | null>(null);
     const [error,     setError]     = useState('');
 
-    // [FIX] Escape で閉じる
+    const { logs, clearLogs } = useToolProgress(running);
+
     useEffect(() => {
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', handler);
@@ -99,7 +100,10 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
         if (!fileA)  { setError(t.noA);      return; }
         if (!fileB)  { setError(t.noB);      return; }
         if (!output) { setError(t.noOutput); return; }
-        setError(''); setRunning(true); setResult(null);
+        setError('');
+        clearLogs();
+        setRunning(true);
+        setResult(null);
         try {
             const res = await invoke<CompareResult>('run_compare', {
                 inputA: fileA, inputB: fileB, output, threshold, highlight,
@@ -110,7 +114,7 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
         } finally {
             setRunning(false);
         }
-    }, [fileA, fileB, output, threshold, highlight, t]);
+    }, [fileA, fileB, output, threshold, highlight, t, clearLogs]);
 
     const basename = (p: string) => p.replace(/\\/g, '/').split('/').pop() ?? p;
 
@@ -129,7 +133,6 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
                 </div>
 
                 <div className="tool-modal-body">
-                    {/* ファイルA */}
                     <div className="tool-field">
                         <label className="tool-label">{t.fileA}</label>
                         <div className="tool-path-row">
@@ -145,7 +148,6 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* ファイルB */}
                     <div className="tool-field">
                         <label className="tool-label">{t.fileB}</label>
                         <div className="tool-path-row">
@@ -156,7 +158,6 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* 出力先 */}
                     <div className="tool-field">
                         <label className="tool-label">{t.output}</label>
                         <div className="tool-path-row">
@@ -167,7 +168,6 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* しきい値 */}
                     <div className="tool-field">
                         <label className="tool-label">{t.threshold} <span className="tool-label-sub">{t.threshDesc}</span></label>
                         <div className="tool-slider-row">
@@ -181,7 +181,6 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
                         </div>
                     </div>
 
-                    {/* ハイライトカラー */}
                     <div className="tool-field">
                         <label className="tool-label">{t.highlight}</label>
                         <div className="tool-format-row">
@@ -200,7 +199,10 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
 
                     {error && <div className="tool-error"><AlertCircle size={13} /><span>{error}</span></div>}
 
-                    {result && (
+                    {/* 進捗ログ */}
+                    <ToolLogPanel logs={logs} running={running} language={language} />
+
+                    {result && !running && (
                         <div className={`tool-result ${result.changed_pct < 5 ? 'success' : 'warn'}`}>
                             <CheckCircle2 size={14} />
                             <div>
