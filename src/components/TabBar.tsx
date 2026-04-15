@@ -1,7 +1,8 @@
 /**
  * src/components/TabBar.tsx
  *
- * ファイルタブバー。ドラッグ&ドロップで並び替え可能。
+ * 修正: handleAuxClick に e.stopPropagation() を追加
+ *       ミドルクリック時のブラウザ・オートスクロール起動を防止
  */
 
 import { useRef, useState, useCallback } from 'react';
@@ -52,16 +53,20 @@ export const TabBar = ({
         onClose(id);
     }, [onClose]);
 
-    // ミドルクリックで閉じる
+    // ✅ stopPropagation を追加してオートスクロールや親イベントへの伝播を防止
     const handleAuxClick = useCallback((e: React.MouseEvent, id: string) => {
-        if (e.button === 1) { e.preventDefault(); onClose(id); }
+        if (e.button === 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            onClose(id);
+        }
     }, [onClose]);
 
     return (
         <div className="tab-bar" onDragLeave={() => setDragOverId(null)}>
             <div className="tab-bar-inner">
                 {tabs.map(tab => {
-                    const isActive  = tab.id === activeId;
+                    const isActive   = tab.id === activeId;
                     const isDragOver = tab.id === dragOverId;
                     return (
                         <div

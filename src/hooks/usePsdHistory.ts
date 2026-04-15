@@ -27,8 +27,6 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
         if (!current) return;
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), current];
         redoStack.current = [];
-        // [FIX #3] psdRef を先に更新してから setState することで、
-        // commitPsd 連鎖呼び出し時に psdRef が古い値を指すのを防ぐ
         psdRef.current = nextLevelPsd;
         setPsd(nextLevelPsd);
         syncHistoryState();
@@ -59,8 +57,7 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
         const next = redoStack.current.pop()!;
         psdRef.current = next;
         setPsd(next);
-        syncHistoryState();
-        syncHistoryState();
+        syncHistoryState(); // ✅ 重複していた2回目の呼び出しを削除
     }, [syncHistoryState]);
 
     const toggleRadioLayer = useCallback((path: number[], siblings: PsdLayerNode[]) => {

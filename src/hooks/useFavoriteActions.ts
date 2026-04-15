@@ -27,6 +27,17 @@ interface UseFavoriteActionsProps {
     lang: 'ja' | 'en';
 }
 
+interface FavoriteDialogState {
+    mode: 'create' | 'rename';
+    id?: string;
+    value: string;
+    /** ダイアログを開いた瞬間の UI 状態をキャプチャして保持 */
+    capturedClosedKeys?: string[];
+    capturedUi?: Record<string, unknown>;
+    capturedLayerState?: any;
+    capturedPreviewDataUrl?: string;
+}
+
 export const useFavoriteActions = ({
     psdRef,
     commitPsd,
@@ -46,9 +57,7 @@ export const useFavoriteActions = ({
     canvasRef,
     lang,
 }: UseFavoriteActionsProps) => {
-    const [favoriteDialog, setFavoriteDialog] = useState<{
-        mode: 'create' | 'rename'; id?: string; value: string
-    } | null>(null);
+    const [favoriteDialog, setFavoriteDialog] = useState<FavoriteDialogState | null>(null);
     const [favoriteDrop, setFavoriteDrop] = useState<{ id: string; position: 'before' | 'after' } | null>(null);
 
     const favoriteListRef = useRef<HTMLUListElement>(null);
@@ -122,11 +131,43 @@ export const useFavoriteActions = ({
         }
     }, [psdRef, favorites, showToast, L, lang]);
 
-    const openCreateFavorite = useCallback((closedKeys: string[], ui: any) => {
+    /**
+     * ✅ ダイアログを開く時点で closedKeys・ui・レイヤー状態・プレビューを
+     *    すべてキャプチャして FavoriteDialogState に保持する。
+     *    confirm 時には保持済みのデータを使うため、ダイアログ操作中の
+     *    状態変化に影響されない。
+     */
+    const openCreateFavorite = useCallback((closedKeys: string[], ui: Record<string, unknown>) => {
         if (!psdRef.current?.children) return;
-        setFavoriteDialog({ mode: 'create', value: `${L.favorites} ${favorites.length + 1}` });
-        // We'll handle the actual saving in confirmFavoriteDialog but we need to pass current UI state
-    }, [favorites.length, L, psdRef]);
+
+        const capturedLayerState = captureLayerState(psdRef.current.children);
+
+        const capturedPreviewDataUrl = (() => {
+            const src = canvasRef.current;
+            if (!src) return undefined;
+            const SIZE = 64;
+            const tmp = document.createElement('canvas');
+            const { width: sw, height: sh } = src;
+            const scale = Math.min(SIZE / sw, SIZE / sh, 1);
+            tmp.width  = Math.max(1, Math.round(sw * scale));
+            tmp.height = Math.max(1, Math.round(sh * scale));
+            const ctx = tmp.getContext('2d');
+            if (!ctx) return undefined;
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(src, 0, 0, tmp.width, tmp.height);
+            return tmp.toDataURL('image/png');
+        })();
+
+        setFavoriteDialog({
+            mode: 'create',
+            value: `${L.favorites} ${favorites.length + 1}`,
+            capturedClosedKeys: closedKeys,
+            capturedUi: ui,
+            capturedLayerState,
+            capturedPreviewDataUrl,
+        });
+    }, [favorites.length, L, psdRef, canvasRef]);
 
     const cacheFavoriteRects = useCallback(() => {
         const root = favoriteListRef.current; if (!root) return;
@@ -185,42 +226,32 @@ export const useFavoriteActions = ({
         };
     }, []);
 
-    const confirmFavoriteDialog = useCallback((closedKeys: string[], ui: any) => {
+    /**
+     * ✅ キャプチャ済みのデータを使って保存する。
+     *    引数の closedKeys/ui は rename モード用のフォールバックとして残す。
+     */
+    const confirmFavoriteDialog = useCallback((_closedKeys: string[], _ui: any) => {
         if (!favoriteDialog) return;
-        const name = favoriteDialog.value.trim(); if (!name) return;
+        const name = favoriteDialog.value.trim();
+        if (!name) return;
 
         if (favoriteDialog.mode === 'create') {
             if (!psdRef.current?.children) return;
 
-            const previewDataUrl = (() => {
-                const src = canvasRef.current;
-                if (!src) return undefined;
-                const SIZE = 64;
-                const tmp = document.createElement('canvas');
-                const { width: sw, height: sh } = src;
-                const scale = Math.min(SIZE / sw, SIZE / sh, 1);
-                tmp.width = Math.max(1, Math.round(sw * scale));
-                tmp.height = Math.max(1, Math.round(sh * scale));
-                const ctx = tmp.getContext('2d');
-                if (!ctx) return undefined;
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(src, 0, 0, tmp.width, tmp.height);
-                return tmp.toDataURL('image/png');
-            })();
+            // ダイアログを開いた時点でキャプチャ済みのデータを使用
+            const layerState = favoriteDialog.capturedLayerState
+                ?? captureLayerState(psdRef.current.children);
+            const closedKeys = favoriteDialog.capturedClosedKeys ?? _closedKeys;
+            const ui         = favoriteDialog.capturedUi ?? _ui;
+            const previewDataUrl = favoriteDialog.capturedPreviewDataUrl;
 
-            saveFavorite(
-                name,
-                captureLayerState(psdRef.current.children),
-                closedKeys,
-                { ...ui, previewDataUrl },
-            );
+            saveFavorite(name, layerState, closedKeys, { ...ui, previewDataUrl });
             showToast(L.saved);
         } else if (favoriteDialog.mode === 'rename' && favoriteDialog.id) {
             updateFavoriteName(favoriteDialog.id, name);
         }
         setFavoriteDialog(null);
-    }, [favoriteDialog, psdRef, saveFavorite, showToast, L, updateFavoriteName, canvasRef]);
+    }, [favoriteDialog, psdRef, saveFavorite, showToast, L, updateFavoriteName]);
 
     return {
         favoriteDialog,

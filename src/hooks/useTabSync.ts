@@ -36,24 +36,33 @@ export const useTabSync = ({
 }: UseTabSyncProps) => {
     const prevActiveIdRef = useRef<string>(activeId);
     const outgoingUiRef = useRef({ zoom, flipX, flipY, closedKeys: Array.from(closedKeys) });
-    
+
+    // ✅ tabs を ref で保持することで、useLayoutEffect の依存配列から除外し
+    //    updateTab 呼び出しによる tabs 変化で effect が再実行されるのを防ぐ
+    const tabsRef = useRef(tabs);
+    tabsRef.current = tabs;
+
     outgoingUiRef.current = { zoom, flipX, flipY, closedKeys: Array.from(closedKeys) };
 
     useLayoutEffect(() => {
         const prevId = prevActiveIdRef.current;
         if (prevId === activeId) return;
 
+        // 退出するタブのUI状態を保存
         const { zoom: z, flipX: fx, flipY: fy, closedKeys: ck } = outgoingUiRef.current;
         updateTab(prevId, {
             zoom: z, flipX: fx, flipY: fy, closedKeys: ck,
             scrollLeft: scrollRef.current?.scrollLeft ?? 0,
-            scrollTop: scrollRef.current?.scrollTop ?? 0,
+            scrollTop:  scrollRef.current?.scrollTop  ?? 0,
         });
 
         prevActiveIdRef.current = activeId;
-        const nextTab = tabs.find(t => t.id === activeId);
+
+        // ✅ tabsRef.current を使うことで依存配列に tabs を入れずに最新値を参照
+        const nextTab = tabsRef.current.find(t => t.id === activeId);
         if (!nextTab) return;
 
+        // ドラッグ中状態をリセット
         layerDragCleanup();
         if (favoriteDragCleanupRef.current) {
             favoriteDragCleanupRef.current();
@@ -61,13 +70,15 @@ export const useTabSync = ({
             setFavoriteDrop(null);
         }
 
+        // リネームセッションをリセット
         renameSessionRef.current = false;
         if (renameTimerRef.current) {
             clearTimeout(renameTimerRef.current);
             renameTimerRef.current = null;
         }
 
-        resetHistory(nextTab.psd);
+        // 次のタブの状態を復元
+        resetHistory(nextTab.psd ?? null);
         setCurrentFilePath(nextTab.filePath);
         setFlipX(nextTab.flipX);
         setFlipY(nextTab.flipY);
@@ -78,7 +89,17 @@ export const useTabSync = ({
 
         isFirstLoadRef.current = true;
         setZoomTo(nextTab.zoom);
+
         const el = scrollRef.current;
-        if (el) { el.scrollLeft = nextTab.scrollLeft; el.scrollTop = nextTab.scrollTop; }
-    }, [activeId, updateTab, resetHistory, setZoomTo, layerDragCleanup, favoriteDragCleanupRef, setFavoriteDrop, renameSessionRef, renameTimerRef, isFirstLoadRef, setFlipX, setFlipY, scrollRef, tabs, setCurrentFilePath, setClosedKeys, setSearchQuery, setZoomInputActive]);
+        if (el) {
+            el.scrollLeft = nextTab.scrollLeft;
+            el.scrollTop  = nextTab.scrollTop;
+        }
+    // ✅ tabs を依存配列から除外（tabsRef.current で参照）
+    }, [
+        activeId, updateTab, resetHistory, setZoomTo, layerDragCleanup,
+        favoriteDragCleanupRef, setFavoriteDrop, renameSessionRef, renameTimerRef,
+        isFirstLoadRef, setFlipX, setFlipY, scrollRef, setCurrentFilePath,
+        setClosedKeys, setSearchQuery, setZoomInputActive,
+    ]);
 };

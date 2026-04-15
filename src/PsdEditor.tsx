@@ -16,21 +16,18 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useLayerDragDrop } from './hooks/useLayerDragDrop';
 import { usePsdExport, ExportFormat } from './hooks/usePsdExport';
 
-// New hooks
 import { usePsdEditorUI } from './hooks/usePsdEditorUI';
 import { usePsdLoader } from './hooks/usePsdLoader';
 import { useEditorCanvas } from './hooks/useEditorCanvas';
 import { useLayerActions } from './hooks/useLayerActions';
 import { useFavoriteActions } from './hooks/useFavoriteActions';
 
-// Refactored hooks
 import { useZoomInput } from './hooks/useZoomInput';
 import { useLayerUIState } from './hooks/useLayerUIState';
 import { useTabSync } from './hooks/useTabSync';
 import { useFileActions } from './hooks/useFileActions';
 import { useEditorLifecycle } from './hooks/useEditorLifecycle';
 
-// New constants/components
 import { getTranslations } from './constants/translations';
 import { EditorHeader } from './components/editor/EditorHeader';
 import { LayerPanel } from './components/editor/LayerPanel';
@@ -68,46 +65,38 @@ const PsdEditor = () => {
 
     const L = useMemo(() => getTranslations(settings.language), [settings.language]);
 
-    // UI Hook
     const ui = usePsdEditorUI(updateSettings);
     const { showToast } = ui;
 
-    // Loader Hook
     const { openPsdUnified, isFirstLoadRef } = usePsdLoader({
         tabManager, loadPsd, addRecentFile, showToast, L, resetHistory,
         setCurrentFilePath, setIsLoading, setIsDragging, activeIdRef, tabsRef
     });
 
-    // Canvas Hook
     const {
         canvasRef, flipX, setFlipX, flipY, setFlipY, radioEnabled, setRadioEnabled,
         lockedEnabled, setLockedEnabled, flipEnabled, setFlipEnabled,
         drawRafRef, hasFlipSuffix
     } = useEditorCanvas(psd, psdRef);
 
-    // Zoom Hook
     const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
-    // Refactored: Zoom Input logic
     const {
         zoomInputActive, setZoomInputActive, zoomInputValue, setZoomInputValue,
         zoomInputRef, handleZoomInputFocus, handleZoomInputCommit
     } = useZoomInput(zoom, setZoomTo);
 
-    // Layer Actions Hook
     const {
         toggleLayerVisibility, renameLayer, handleAddLayer, handleAddGroup, handleDeleteLayer,
         renameSessionRef, renameTimerRef
     } = useLayerActions({ psdRef, commitPsd, pushSnapshot, setPsd, markDirty: () => tabManager.markDirty() });
 
-    // Refactored: Layer UI State (Closed keys & Search)
     const {
         closedKeys, setClosedKeys, searchQuery, setSearchQuery, searchInputRef,
         handleToggleExpand, handleExpandAll, handleCollapseAll, searchResults
     } = useLayerUIState(psd);
 
-    // Favorites Hook
     const {
         favorites, saveFavorite, deleteFavorite, updateFavoriteName, moveFavoriteTo, importFavorites,
     } = useLayerFavorites(currentFilePath);
@@ -122,12 +111,10 @@ const PsdEditor = () => {
         favorites, saveFavorite, updateFavoriteName, moveFavoriteTo, canvasRef, lang: settings.language
     });
 
-    // Drag and Drop Hook
     const { draggingPath, dropTarget, handleLayerDragStart, cleanupDrag: layerDragCleanup } = useLayerDragDrop(
         layerScrollRef, psdRef, commitPsd, () => tabManager.markDirty()
     );
 
-    // Refactored: Tab Synchronization
     useTabSync({
         activeId, tabs, updateTab, scrollRef, zoom, flipX, flipY, closedKeys,
         resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
@@ -136,15 +123,12 @@ const PsdEditor = () => {
         renameSessionRef, renameTimerRef
     });
 
-    // Refactored: File Actions
     const { handleOpenFile, handleCopyCanvas, handleSaveFile } = useFileActions({
         psd, canvasRef, openPsdUnified, showToast, L, activeId, updateTab, language: settings.language
     });
 
-    // Export Hook
     const { handleExportPng } = usePsdExport(canvasRef, psd, settings, showToast, L);
 
-    // Refactored: Lifecycle effects
     useEditorLifecycle({
         psd, isFirstLoadRef, scrollRef, centerPsd, drawRafRef, layerDragCleanup
     });
@@ -152,7 +136,9 @@ const PsdEditor = () => {
     useKeyboardShortcuts({
         handleUndo, handleRedo, handleCopyCanvas, handleToggleFullscreen: ui.handleToggleFullscreen,
         handleOpenFile, setShowSettings: ui.setShowSettings, handleZoom, centerPsd,
-        tabs, activeId, handleActivateTab: tabManager.setActiveId, handleCloseTab: id => startTransition(() => tabManager.closeTab(id)), handleNewTab: () => {
+        tabs, activeId, handleActivateTab: tabManager.setActiveId,
+        handleCloseTab: id => startTransition(() => tabManager.closeTab(id)),
+        handleNewTab: () => {
             tabManager.openNewTab();
             resetHistory(null); setCurrentFilePath(null); setFlipX(false); setFlipY(false); setClosedKeys(new Set());
         }
@@ -230,7 +216,11 @@ const PsdEditor = () => {
                     dropTarget={dropTarget} hasFlipSuffix={hasFlipSuffix}
                     handleExpandAll={handleExpandAll} handleCollapseAll={handleCollapseAll}
                     handleAddLayer={handleAddLayer} handleAddGroup={handleAddGroup}
-                    favorites={favorites} openCreateFavorite={() => openCreateFavorite(Array.from(closedKeys), { zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled })}
+                    favorites={favorites}
+                    openCreateFavorite={() => openCreateFavorite(
+                        Array.from(closedKeys),
+                        { zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled }
+                    )}
                     handleApplyFavorite={handleApplyFavorite}
                     openRenameFavorite={f => setFavoriteDialog({ mode: 'rename', id: f.id, value: f.name })}
                     deleteFavorite={deleteFavorite} handleFavoriteDragStart={handleFavoriteDragStart}
@@ -241,6 +231,7 @@ const PsdEditor = () => {
                     onExportFavoriteImage={handleExportFavoriteImage}
                     onExportAllFavoriteImages={handleExportAllFavoriteImages}
                     currentFilePath={currentFilePath}
+                    showToast={showToast} // ✅ 追加
                 />
 
                 <div className="sidebar-resizer" onMouseDown={ui.handleResizerMouseDown} />
@@ -270,7 +261,10 @@ const PsdEditor = () => {
                 <FavoriteModal
                     favoriteDialog={favoriteDialog}
                     closeFavoriteDialog={() => setFavoriteDialog(null)}
-                    confirmFavoriteDialog={() => confirmFavoriteDialog(Array.from(closedKeys), { zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled })}
+                    confirmFavoriteDialog={() => confirmFavoriteDialog(
+                        Array.from(closedKeys),
+                        { zoom, flipX, flipY, radioEnabled, lockedEnabled, flipEnabled }
+                    )}
                     favoriteInputRef={favoriteInputRef}
                     setFavoriteDialog={setFavoriteDialog}
                     L={L}

@@ -49,11 +49,12 @@ interface LayerPanelProps {
     formatFavoriteTime: (ts: number, lang: 'ja' | 'en') => string;
     lang: 'ja' | 'en';
     L: LocaleStrings;
-    // 追加
     importFavorites: (incoming: LayerFavorite[], mode: 'merge' | 'replace') => void;
     onExportFavoriteImage: (fav: LayerFavorite) => void;
     onExportAllFavoriteImages: () => void;
     currentFilePath: string | null;
+    // ✅ 追加: alert() の代わりに使うトースト通知
+    showToast: (message: string, type?: 'success' | 'error') => void;
 }
 
 export const LayerPanel: React.FC<LayerPanelProps> = ({
@@ -66,6 +67,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
     handleFavoriteDragStart, favoriteDrop, favoriteListRef, layerScrollRef,
     formatFavoriteTime, lang, L,
     importFavorites, onExportFavoriteImage, onExportAllFavoriteImages, currentFilePath,
+    showToast, // ✅ 追加
 }) => {
     const layerResizeRef = useRef<HTMLDivElement>(null);
     const [layerListHeight, setLayerListHeight] = useState(400);
@@ -107,9 +109,16 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
             const incoming = await importFavoritesFromJson(file);
             importFavorites(incoming, importMode);
         } catch (err) {
-            alert(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+            // ✅ alert() → showToast() に置き換え
+            const msg = err instanceof Error ? err.message : String(err);
+            showToast(
+                lang === 'ja'
+                    ? `読み込みに失敗しました: ${msg}`
+                    : `Import failed: ${msg}`,
+                'error',
+            );
         }
-    }, [importFavorites, importMode]);
+    }, [importFavorites, importMode, showToast, lang]);
 
     const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -205,42 +214,22 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
 
             {psd && (
                 <div className="favorites-panel">
-                    {/* ── お気に入りヘッダー ── */}
                     <div className="favorites-header">
                         <span className="favorites-title">{L.favorites}</span>
                         <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                            {/* 全件PNG書き出し */}
                             {favorites.length > 0 && (
-                                <button
-                                    className="favorite-add"
-                                    onClick={onExportAllFavoriteImages}
-                                    title={favToolTip.exportImg}
-                                    aria-label="Export all favorites as PNG"
-                                >
+                                <button className="favorite-add" onClick={onExportAllFavoriteImages} title={favToolTip.exportImg} aria-label="Export all favorites as PNG">
                                     <ImageIcon size={12} />
                                 </button>
                             )}
-                            {/* JSON 書き出し */}
                             {favorites.length > 0 && (
-                                <button
-                                    className="favorite-add"
-                                    onClick={handleExportJson}
-                                    title={favToolTip.exportJson}
-                                    aria-label="Export favorites as JSON"
-                                >
+                                <button className="favorite-add" onClick={handleExportJson} title={favToolTip.exportJson} aria-label="Export favorites as JSON">
                                     <Download size={12} />
                                 </button>
                             )}
-                            {/* JSON 読み込み */}
-                            <button
-                                className="favorite-add"
-                                onClick={handleImportClick}
-                                title={favToolTip.importJson}
-                                aria-label="Import favorites from JSON"
-                            >
+                            <button className="favorite-add" onClick={handleImportClick} title={favToolTip.importJson} aria-label="Import favorites from JSON">
                                 <Upload size={12} />
                             </button>
-                            {/* merge / replace トグル — import ボタンの横に小さく表示 */}
                             <button
                                 className={`favorite-add ${importMode === 'replace' ? 'btn-active' : ''}`}
                                 onClick={() => setImportMode(m => m === 'merge' ? 'replace' : 'merge')}
@@ -252,13 +241,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                             >
                                 {importMode === 'merge' ? '+M' : '=R'}
                             </button>
-                            {/* 新規保存 */}
-                            <button
-                                className="favorite-add"
-                                onClick={openCreateFavorite}
-                                title={L.saveState}
-                                aria-label="Save current visibility state as favorite"
-                            >
+                            <button className="favorite-add" onClick={openCreateFavorite} title={L.saveState} aria-label="Save current visibility state as favorite">
                                 <Star size={12} />
                             </button>
                         </div>
@@ -291,49 +274,24 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                                             >
                                                 <GripVertical size={12} />
                                             </span>
-
-                                            {/* PNG プレビューサムネイル（あれば表示） */}
                                             {fav.previewDataUrl ? (
-                                                <img
-                                                    src={fav.previewDataUrl}
-                                                    alt=""
-                                                    className="favorite-preview-thumb"
-                                                    aria-hidden="true"
-                                                />
+                                                <img src={fav.previewDataUrl} alt="" className="favorite-preview-thumb" aria-hidden="true" />
                                             ) : (
                                                 <Star size={11} className="favorite-icon" />
                                             )}
-
                                             <span className="favorite-name" data-full={fav.name} title={fav.name}>
                                                 {fav.name}
                                             </span>
                                             <span className="favorite-time">{formatFavoriteTime(fav.createdAt, lang)}</span>
                                         </button>
-
                                         <div className="favorite-actions">
-                                            {/* 1件PNG書き出し */}
-                                            <button
-                                                className="favorite-action"
-                                                onClick={() => onExportFavoriteImage(fav)}
-                                                title={lang === 'ja' ? 'PNGで書き出し' : 'Export as PNG'}
-                                                aria-label={`Export ${fav.name} as PNG`}
-                                            >
+                                            <button className="favorite-action" onClick={() => onExportFavoriteImage(fav)} title={lang === 'ja' ? 'PNGで書き出し' : 'Export as PNG'} aria-label={`Export ${fav.name} as PNG`}>
                                                 <ImageIcon size={11} />
                                             </button>
-                                            <button
-                                                className="favorite-action"
-                                                onClick={() => openRenameFavorite(fav)}
-                                                title={L.renameState}
-                                                aria-label={`Rename favorite: ${fav.name}`}
-                                            >
+                                            <button className="favorite-action" onClick={() => openRenameFavorite(fav)} title={L.renameState} aria-label={`Rename favorite: ${fav.name}`}>
                                                 <Pencil size={11} />
                                             </button>
-                                            <button
-                                                className="favorite-delete"
-                                                onClick={() => deleteFavorite(fav.id)}
-                                                title={L.deleteState}
-                                                aria-label={`Delete favorite: ${fav.name}`}
-                                            >
+                                            <button className="favorite-delete" onClick={() => deleteFavorite(fav.id)} title={L.deleteState} aria-label={`Delete favorite: ${fav.name}`}>
                                                 <Trash2 size={11} />
                                             </button>
                                         </div>
@@ -360,12 +318,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                         aria-label="Search layers by name"
                     />
                     {searchQuery && (
-                        <button
-                            className="layer-search-clear"
-                            onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }}
-                            title="Clear search"
-                            aria-label="Clear search query"
-                        >
+                        <button className="layer-search-clear" onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }} title="Clear search" aria-label="Clear search query">
                             <X size={11} />
                         </button>
                     )}

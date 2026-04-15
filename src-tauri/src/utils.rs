@@ -1,18 +1,72 @@
 use std::path::Path;
 
+// ── PSD 読み込み ─────────────────────────────────────────────────────────────
+
 pub fn load_psd(input: &str) -> Result<psd::Psd, String> {
+    // ファイル存在チェック
+    let path = Path::new(input);
+    if !path.exists() {
+        return Err(format!("File not found: '{}'", input));
+    }
+    if !path.is_file() {
+        return Err(format!("Path is not a file: '{}'", input));
+    }
+    // 拡張子チェック（警告のみ、強制はしない）
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("psd") => {}
+        Some(ext) => eprintln!("Warning: unexpected extension '.{}' for '{}'", ext, input),
+        None => eprintln!("Warning: no extension for '{}'", input),
+    }
+
     let data = std::fs::read(input)
         .map_err(|e| format!("Failed to read '{}': {}", input, e))?;
+
+    if data.len() < 26 {
+        return Err(format!("File too small to be a valid PSD: '{}' ({} bytes)", input, data.len()));
+    }
+    // PSD マジックバイト検証: "8BPS"
+    if &data[..4] != b"8BPS" {
+        return Err(format!(
+            "Invalid PSD signature in '{}' (got {:?}, expected \"8BPS\")",
+            input,
+            &data[..4.min(data.len())]
+        ));
+    }
+
     psd::Psd::from_bytes(&data)
         .map_err(|e| format!("Failed to parse PSD '{}': {}", input, e))
 }
 
+// ── 画像変換 ─────────────────────────────────────────────────────────────────
+
 pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String> {
     let width  = psd_file.width();
     let height = psd_file.height();
-    let rgba   = psd_file.rgba();
+
+    if width == 0 || height == 0 {
+        return Err(format!(
+            "PSD has zero dimension: {}×{}", width, height
+        ));
+    }
+    // 非常に大きなファイルへの警告（>200MP）
+    let megapixels = (width as u64 * height as u64) as f64 / 1_000_000.0;
+    if megapixels > 200.0 {
+        eprintln!("Warning: Large PSD ({:.1}MP) — this may use significant memory", megapixels);
+    }
+
+    let rgba = psd_file.rgba();
+    let expected = (width * height * 4) as usize;
+    if rgba.len() != expected {
+        return Err(format!(
+            "Unexpected RGBA data length: got {} bytes, expected {} ({}×{}×4)",
+            rgba.len(), expected, width, height
+        ));
+    }
+
     image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| "Failed to create image from raw bytes".to_string())
+        .ok_or_else(|| format!(
+            "Failed to create image from raw bytes ({}×{})", width, height
+        ))
 }
 
 pub fn psd_to_png_bytes(psd_file: &psd::Psd) -> Result<Vec<u8>, String> {
@@ -24,18 +78,43 @@ pub fn encode_image_rgba(img: &image::RgbaImage, format: &str) -> Result<Vec<u8>
     let mut buf = std::io::Cursor::new(Vec::new());
     let fmt = image_format(format);
     if matches!(fmt, image::ImageFormat::Jpeg) {
+        // JPEG はアルファチャンネルを持てないので RGB に変換
         let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
         rgb.write_to(&mut buf, fmt)
-            .map_err(|e| format!("Encode error: {}", e))?;
+            .map_err(|e| format!("JPEG encode error: {}", e))?;
     } else {
         img.write_to(&mut buf, fmt)
-            .map_err(|e| format!("Encode error: {}", e))?;
+            .map_err(|e| format!("{} encode error: {}", format.to_uppercase(), e))?;
     }
-    Ok(buf.into_inner())
+    let bytes = buf.into_inner();
+    if bytes.is_empty() {
+        return Err(format!("Encoded {} output is empty", format));
+    }
+    Ok(bytes)
 }
 
+// ── ファイル保存 ──────────────────────────────────────────────────────────────
+
+pub fn save_bytes(path: &str, bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err(format!("Refusing to write empty content to '{}'", path));
+    }
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!(
+                    "Failed to create directory '{}': {}", parent.display(), e
+                ))?;
+        }
+    }
+    std::fs::write(path, bytes)
+        .map_err(|e| format!("Failed to write '{}': {}", path, e))
+}
+
+// ── フォーマットヘルパー ──────────────────────────────────────────────────────
+
 pub fn image_format(s: &str) -> image::ImageFormat {
-    match s {
+    match s.to_lowercase().as_str() {
         "jpeg" | "jpg" => image::ImageFormat::Jpeg,
         "webp"         => image::ImageFormat::WebP,
         _              => image::ImageFormat::Png,
@@ -46,16 +125,7 @@ pub fn image_ext(s: &str) -> &str {
     match s { "jpeg" | "jpg" => "jpg", "webp" => "webp", _ => "png" }
 }
 
-pub fn save_bytes(path: &str, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory '{}': {}", parent.display(), e))?;
-        }
-    }
-    std::fs::write(path, bytes)
-        .map_err(|e| format!("Failed to write '{}': {}", path, e))
-}
+// ── プロセス終了 ──────────────────────────────────────────────────────────────
 
 pub fn exit_on(result: Result<(), String>) -> ! {
     match result {
@@ -64,11 +134,24 @@ pub fn exit_on(result: Result<(), String>) -> ! {
     }
 }
 
+// ── 名前サニタイズ ────────────────────────────────────────────────────────────
+
 pub fn sanitize_name(name: &str) -> String {
-    name.chars()
+    let sanitized: String = name.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
-        .collect::<String>().trim().replace(' ', "_")
+        .collect::<String>()
+        .trim()
+        .replace(' ', "_");
+
+    // 空になってしまった場合のフォールバック
+    if sanitized.is_empty() {
+        "unnamed_layer".to_string()
+    } else {
+        sanitized
+    }
 }
+
+// ── Windows: エクスプローラー起動判定 ────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
 pub fn is_launched_from_explorer() -> bool {

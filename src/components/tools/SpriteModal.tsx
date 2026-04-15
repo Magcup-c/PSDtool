@@ -1,10 +1,10 @@
 /**
  * src/components/tools/SpriteModal.tsx
  *
- * 複数PSDからスプライトシートを生成するモーダル。
+ * 修正: Escape キーで閉じる useEffect を追加
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { X, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-react';
@@ -67,16 +67,23 @@ interface SpriteResult { width: number; height: number; frame_count: number }
 
 export const SpriteModal = ({ language, onClose }: Props) => {
     const t = L[language];
-    const [inputDir,  setInputDir]  = useState('');
-    const [output,    setOutput]    = useState('');
-    const [layout,    setLayout]    = useState<Layout>('horizontal');
-    const [cols,      setCols]      = useState(4);
-    const [padding,   setPadding]   = useState(4);
-    const [format,    setFormat]    = useState<Fmt>('png');
-    const [exportJson,setExportJson]= useState(false);
-    const [running,   setRunning]   = useState(false);
-    const [result,    setResult]    = useState<SpriteResult | null>(null);
-    const [error,     setError]     = useState('');
+    const [inputDir,   setInputDir]   = useState('');
+    const [output,     setOutput]     = useState('');
+    const [layout,     setLayout]     = useState<Layout>('horizontal');
+    const [cols,       setCols]       = useState(4);
+    const [padding,    setPadding]    = useState(4);
+    const [format,     setFormat]     = useState<Fmt>('png');
+    const [exportJson, setExportJson] = useState(false);
+    const [running,    setRunning]    = useState(false);
+    const [result,     setResult]     = useState<SpriteResult | null>(null);
+    const [error,      setError]      = useState('');
+
+    // ✅ 追加: Escape で閉じる（他のツールモーダルと統一）
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [onClose]);
 
     const pickInput = useCallback(async () => {
         const dir = await open({ directory: true });
