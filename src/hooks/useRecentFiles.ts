@@ -18,7 +18,11 @@ function loadRecent(): RecentFile[] {
 }
 
 function saveRecent(files: RecentFile[]) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(files));
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(files));
+    } catch (e) {
+        console.warn('Failed to persist recent files:', e);
+    }
 }
 
 function basename(path: string): string {

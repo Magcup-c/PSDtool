@@ -44,16 +44,28 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
 
         const drawLayers = (layers: PsdLayerNode[]) => {
             const flipMap = new Map<string, PsdLayerNode>();
-            if (flipEnabled && flipSuffix) {
-                for (const l of layers)
-                    if ((l.name || '').toLowerCase().endsWith(flipSuffix.toLowerCase()))
-                        flipMap.set(getBaseName(l.name || '').toLowerCase(), l);
+            const plainNameSet = new Set<string>();
+            if (flipEnabled) {
+                for (const l of layers) {
+                    const layerName = l.name || '';
+                    const lower = layerName.toLowerCase();
+                    if (!hasFlipSuffix(layerName)) plainNameSet.add(lower);
+                    if (flipSuffix && lower.endsWith(flipSuffix.toLowerCase())) {
+                        flipMap.set(getBaseName(layerName).toLowerCase(), l);
+                    }
+                }
             }
             for (const layer of layers) {
                 if (layer.hidden) continue;
                 const name = layer.name || '';
-                if (flipEnabled && hasFlipSuffix(name) && getFlipSuffix() && name.toLowerCase().endsWith(getFlipSuffix().toLowerCase())) continue;
-                const effectiveLayer = flipMap.get(name.toLowerCase()) ?? layer;
+                const lowerName = name.toLowerCase();
+                if (flipEnabled && hasFlipSuffix(name)) {
+                    // flip variant layers are drawn only when active.
+                    if (!flipSuffix || !lowerName.endsWith(flipSuffix.toLowerCase())) continue;
+                    // If base exists, it will draw the selected variant via flipMap.
+                    if (plainNameSet.has(getBaseName(name).toLowerCase())) continue;
+                }
+                const effectiveLayer = flipMap.get(lowerName) ?? layer;
                 if (effectiveLayer.children) drawLayers(effectiveLayer.children);
                 else if (effectiveLayer._bitmap) ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
                 else if (effectiveLayer.canvas) ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);

@@ -264,22 +264,19 @@ pub fn run_compare(
         return Err("One or both PSD files have zero dimensions".to_string());
     }
 
-    // ピクセル比較を Rayon で行
-    let pixels: Vec<(u32, u32)> = (0..h)
-        .flat_map(|y| (0..w).map(move |x| (x, y)))
-        .collect();
-
-    let pixel_results: Vec<(u32, u32, image::Rgba<u8>, bool)> = pixels
-        .par_iter()
-        .map(|&(x, y)| {
+    // ピクセル比較は逐次処理して中間Vecのメモリ増加を避ける
+    let mut diff = image::RgbaImage::new(w, h);
+    let mut changed = 0u64;
+    for y in 0..h {
+        for x in 0..w {
             let pa = if x < wa && y < ha { *img_a.get_pixel(x, y) } else { image::Rgba([0,0,0,0]) };
             let pb = if x < wb && y < hb { *img_b.get_pixel(x, y) } else { image::Rgba([0,0,0,0]) };
             let delta = (0..4)
                 .map(|i| (pa[i] as i32 - pb[i] as i32).unsigned_abs() as u8)
                 .max()
                 .unwrap_or(0);
-            let changed = delta > threshold;
-            let pixel = if changed {
+            let is_changed = delta > threshold;
+            let pixel = if is_changed {
                 match highlight.as_str() {
                     "magenta" => image::Rgba([255, 0, 255, 255]),
                     "heat" => {
@@ -294,15 +291,9 @@ pub fn run_compare(
                 let b = ((pa[2] as u16 + pb[2] as u16) / 2) as u8 / 2;
                 image::Rgba([r, g, b, 200])
             };
-            (x, y, pixel, changed)
-        })
-        .collect();
-
-    let mut diff = image::RgbaImage::new(w, h);
-    let mut changed = 0u64;
-    for (x, y, pixel, is_changed) in pixel_results {
-        diff.put_pixel(x, y, pixel);
-        if is_changed { changed += 1; }
+            diff.put_pixel(x, y, pixel);
+            if is_changed { changed += 1; }
+        }
     }
 
     let pct = changed as f64 / (w * h) as f64 * 100.0;

@@ -171,11 +171,8 @@ async function collectLayerBitmaps(
 
 // ── メインハンドラ ────────────────────────────────────────────────────────────
 
-let currentJobId: number | null = null;
-
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     const { id, buffer } = event.data;
-    currentJobId = id;
 
     // バリデーション
     if (!buffer || buffer.byteLength === 0) {
@@ -205,8 +202,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
             skipCompositeImageData: false,
         });
 
-        if (currentJobId !== id) return;
-
         if (!psd || typeof psd !== 'object') {
             throw new Error('readPsd returned an invalid result');
         }
@@ -219,11 +214,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         const { immediate, deferred } = psd.children
             ? await collectLayerBitmaps(psd.children)
             : { immediate: [], deferred: [] };
-
-        if (currentJobId !== id) {
-            immediate.forEach(e => e.bitmap.close());
-            return;
-        }
 
         // canvas を除去してから postMessage
         if (psd.children) stripCanvas(psd.children);
@@ -240,8 +230,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
         // ── 遅延レスポンス（バッチ送信） ─────────────────────────────────────
         for (let i = 0; i < deferred.length; i += DEFERRED_BATCH_SIZE) {
-            if (currentJobId !== id) return; // 中断
-
             const batch = deferred.slice(i, i + DEFERRED_BATCH_SIZE);
             const done  = i + DEFERRED_BATCH_SIZE >= deferred.length;
 
@@ -251,11 +239,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
                     return bitmap ? { key, bitmap, left, top } : null;
                 }),
             );
-
-            if (currentJobId !== id) {
-                entries.forEach(e => e?.bitmap.close());
-                return;
-            }
 
             const valid = entries.filter((e): e is LayerThumbEntry => e !== null);
 
@@ -273,7 +256,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         }
 
     } catch (err) {
-        if (currentJobId !== id) return;
         const message = err instanceof Error
             ? `${err.name}: ${err.message}`
             : String(err);

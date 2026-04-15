@@ -325,8 +325,13 @@ pub fn run() {
                 }
                 Err(e) => eprintln!("CLI Error: {}", e),
             }
-            let window = app.get_webview_window("main").unwrap();
-            window.show().unwrap();
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(e) = window.show() {
+                    eprintln!("Failed to show main window: {}", e);
+                }
+            } else {
+                eprintln!("Main window not found");
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -67,7 +67,11 @@ export function useSettings() {
     }, [settings.syncThemeWithOS]);
 
     useEffect(() => {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+        } catch (e) {
+            console.warn('Failed to persist settings:', e);
+        }
     }, [settings]);
 
     const updateSettings = (patch: Partial<AppSettings>) => {
