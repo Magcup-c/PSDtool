@@ -22,13 +22,22 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
     const hasFlipSuffix = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
     const getBaseName = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
 
-    const drawCanvas = useCallback(() => {
+    // ★ FIX: psdRef.currentではなく引数のpsdを直接使う
+    // これによりstale closure問題を回避し、最新のpsd状態で描画する
+    const drawCanvas = useCallback((targetPsd?: any) => {
         const canvas = canvasRef.current;
-        const currentPsd = psdRef.current;
-        if (!canvas || !currentPsd) return;
+        // ★ FIX: canvasが存在しない・DOMに接続されていない場合は何もしない
+        if (!canvas || !canvas.isConnected) return;
+
+        const currentPsd = targetPsd ?? psdRef.current;
+        if (!currentPsd) return;
+
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+
         const w = currentPsd.width, h = currentPsd.height;
+        if (!w || !h) return;
+
         if (canvas.width !== w || canvas.height !== h) {
             canvas.width = w;
             canvas.height = h;
@@ -60,19 +69,37 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
                 const name = layer.name || '';
                 const lowerName = name.toLowerCase();
                 if (flipEnabled && hasFlipSuffix(name)) {
-                    // flip variant layers are drawn only when active.
                     if (!flipSuffix || !lowerName.endsWith(flipSuffix.toLowerCase())) continue;
-                    // If base exists, it will draw the selected variant via flipMap.
                     if (plainNameSet.has(getBaseName(name).toLowerCase())) continue;
                 }
                 const effectiveLayer = flipMap.get(lowerName) ?? layer;
                 if (effectiveLayer.children) drawLayers(effectiveLayer.children);
-                else if (effectiveLayer._bitmap) ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
-                else if (effectiveLayer.canvas) ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                else if (effectiveLayer._bitmap) {
+                    try {
+                        ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                    } catch (e) {
+                        // ★ FIX: ImageBitmapが既にclose()されている場合のエラーを握りつぶす
+                        console.warn('[drawCanvas] Failed to draw layer bitmap:', e);
+                    }
+                }
+                else if (effectiveLayer.canvas) {
+                    try {
+                        ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
+                    } catch (e) {
+                        console.warn('[drawCanvas] Failed to draw layer canvas:', e);
+                    }
+                }
             }
         };
+
         if (currentPsd.children) drawLayers(currentPsd.children);
-        else if (currentPsd._bitmap) ctx.drawImage(currentPsd._bitmap, 0, 0);
+        else if (currentPsd._bitmap) {
+            try {
+                ctx.drawImage(currentPsd._bitmap, 0, 0);
+            } catch (e) {
+                console.warn('[drawCanvas] Failed to draw root bitmap:', e);
+            }
+        }
         ctx.restore();
         drawDirtyRef.current = false;
     }, [flipX, flipY, flipEnabled, getFlipSuffix, getBaseName, hasFlipSuffix, psdRef]);
@@ -81,8 +108,9 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
         if (!psd) return;
         drawDirtyRef.current = true;
         if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
+        // ★ FIX: psdを直接drawCanvasに渡してstale refの問題を回避
         drawRafRef.current = requestAnimationFrame(() => {
-            drawCanvas();
+            drawCanvas(psd);
             drawRafRef.current = null;
         });
         return () => {

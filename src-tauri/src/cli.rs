@@ -138,23 +138,9 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
         let (w, h) = (layer.width() as u32, layer.height() as u32);
         if w == 0 || h == 0 { skipped += 1; continue; }
 
-        // psd crate 0.3.5 の PsdLayer::rgba() を取得
-        let mut pixel_data = layer.rgba();
-
-        // 【重要】psd crate 0.3.x の一部のバグにより、layer.rgba() がインターリーブ形式ではなく
-        // 平面形式 (RRR...GGG...BBB...AAA...) でデータを返してしまうことがある。
-        // これが原因で出力が「ノイズ」に見えるため、正しい順番に並べ替える（インターリーブ処理）。
-        if pixel_data.len() == (w * h * 4) as usize {
-            let width = w as usize;
-            let height = h as usize;
-            let planar = pixel_data.clone();
-            for i in 0..(width * height) {
-                pixel_data[i * 4]     = planar[i];
-                pixel_data[i * 4 + 1] = planar[i + width * height];
-                pixel_data[i * 4 + 2] = planar[i + 2 * width * height];
-                pixel_data[i * 4 + 3] = planar[i + 3 * width * height];
-            }
-        }
+        // psd crate の rgba() はインターリーブ形式 (R,G,B,A,R,G,B,A,...) で返す
+        // 以前あった「平面形式→インターリーブ変換」は誤りだったため削除
+        let pixel_data = layer.rgba();
 
         let img = match image::RgbaImage::from_raw(w, h, pixel_data) {
             Some(i) => i,

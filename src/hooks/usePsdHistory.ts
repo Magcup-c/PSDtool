@@ -9,29 +9,28 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
     const redoStack = useRef<PsdRoot[]>([]);
     const psdRef = useRef<PsdRoot | null>(null);
 
+    // ★ FIX: refをレンダー中に同期更新する
+    // useEffect内で更新すると、同じレンダーサイクル内の他のeffect（drawCanvasなど）が
+    // 古いpsdRef.currentを参照してしまうタイミング問題が発生する。
+    // refへの書き込みはReactが許容する副作用パターン。
+    psdRef.current = psd;
+
     // 現在使用中の全ビットマップを追跡（リーク防止用）
     const activeBitmapsRef = useRef<Set<ImageBitmap>>(new Set());
 
     const MAX_UNDO = 50;
 
-    /**
-     *Undo/Redoスタック、および現在のPSDから参照されていないビットマップを特定して解放する。
-     */
     const cleanupResources = useCallback(() => {
         const currentInUse = new Set<ImageBitmap>();
         
-        // 現在のPSD
         collectBitmaps(psdRef.current).forEach(b => currentInUse.add(b));
-        // Undoスタック
         undoStack.current.forEach(item => {
             collectBitmaps(item).forEach(b => currentInUse.add(b));
         });
-        // Redoスタック
         redoStack.current.forEach(item => {
             collectBitmaps(item).forEach(b => currentInUse.add(b));
         });
 
-        // 以前は保持していたが、現在はどこからも参照されていないものを探す
         const toClose: ImageBitmap[] = [];
         activeBitmapsRef.current.forEach(b => {
             if (!currentInUse.has(b)) toClose.push(b);
@@ -42,10 +41,6 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
         }
         activeBitmapsRef.current = currentInUse;
     }, []);
-
-    useEffect(() => {
-        psdRef.current = psd;
-    }, [psd]);
 
     // アンマウント時に全リソース解放
     useEffect(() => {
@@ -60,7 +55,6 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
             canUndo: undoStack.current.length > 0,
             canRedo: redoStack.current.length > 0,
         });
-        // 状態変更のたびに不要なリソースをクリーンアップ
         cleanupResources();
     }, [cleanupResources]);
 
@@ -72,7 +66,6 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
             syncHistoryState();
             return;
         }
-        // 古いスタックの末尾が消える場合は cleanupResources で処理される
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), current];
         redoStack.current = [];
         psdRef.current = nextLevelPsd;

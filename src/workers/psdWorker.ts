@@ -14,7 +14,7 @@ export interface WorkerRequest {
 
 export interface LayerThumbEntry {
   key: string;
-  bitmap: ImageBitmap | null; // ← null許容
+  bitmap: ImageBitmap | null;
   left: number;
   top: number;
 }
@@ -98,43 +98,39 @@ async function collectLayerBitmaps(
 
   const immediate: LayerThumbEntry[] = [];
   const deferred: CollectResult['deferred'] = [];
-
   const tasks: Promise<void>[] = [];
 
   layers.forEach((layer, i) => {
-    const key = [...parentPath, i].join('-');
-
+    const key  = [...parentPath, i].join('-');
     const left = layer.left ?? 0;
     const top  = layer.top  ?? 0;
 
-    // ★ canvas無くてもレイヤーは残す
-    if (!layer.canvas) {
-      immediate.push({ key, bitmap: null, left, top });
-    }
-
-    if (layer.canvas && !layer.children?.length) {
-      const canvas = layer.canvas as OffscreenCanvas;
-      const px = (canvas.width || 0) * (canvas.height || 0);
-
-      if (px <= IMMEDIATE_THRESHOLD_PX) {
-        tasks.push(
-          canvasToBitmap(canvas).then((bitmap) => {
-            // ★ 失敗しても必ずpush
-            immediate.push({ key, bitmap, left, top });
-          }),
-        );
-      } else {
-        deferred.push({ key, canvas, left, top });
-      }
-    }
-
     if (layer.children?.length) {
+      // グループ: canvas は使わず子を再帰処理
       tasks.push(
         collectLayerBitmaps(layer.children, [...parentPath, i]).then((r) => {
           immediate.push(...r.immediate);
           deferred.push(...r.deferred);
         }),
       );
+    } else if (layer.canvas) {
+      // 通常レイヤー: canvas → bitmap 変換
+      const canvas = layer.canvas as OffscreenCanvas;
+      const px = (canvas.width || 0) * (canvas.height || 0);
+
+      if (px <= IMMEDIATE_THRESHOLD_PX) {
+        tasks.push(
+          canvasToBitmap(canvas).then((bitmap) => {
+            immediate.push({ key, bitmap, left, top });
+          }),
+        );
+      } else {
+        // 大きいレイヤーは遅延送信
+        deferred.push({ key, canvas, left, top });
+      }
+    } else {
+      // canvas なし (空レイヤー・調整レイヤー等): null として登録
+      immediate.push({ key, bitmap: null, left, top });
     }
   });
 
@@ -168,7 +164,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       ? await collectLayerBitmaps(psd.children)
       : { immediate: [], deferred: [] };
 
-    // ★ ここが超重要：送る直前に完全除去
+    // 送信前に OffscreenCanvas を完全除去
     const safePsd = removeCanvasDeep(psd);
 
     const hasPending = deferred.length > 0;
@@ -195,13 +191,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       const results = await Promise.all(
         batch.map(async ({ key, canvas, left, top }) => {
           const bitmap = await canvasToBitmap(canvas);
-
-          return {
-            key,
-            bitmap, // nullでもOK
-            left,
-            top,
-          };
+          return { key, bitmap, left, top };
         }),
       );
 

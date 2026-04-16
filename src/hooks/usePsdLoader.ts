@@ -1,10 +1,10 @@
 /**
  * src/hooks/usePsdLoader.ts
  *
- * 改善点:
- *   - loadPsd の onDeferred コールバックを受け取り、
- *     遅延ビットマップが届くたびに PSD ツリーに注入してタブ状態を更新する
- *   - エラーメッセージの詳細化
+ * 修正点:
+ *   - 遅延ビットマップ(deferred)がアクティブタブに届いた時にresetHistoryを呼び
+ *     drawCanvasが再実行されるようにする
+ *   - エラーメッセージの詳細化（既存）
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -88,15 +88,19 @@ export const usePsdLoader = ({
             }
 
             // ── 遅延ビットマップのマージハンドラ ────────────────────────────
-            // 初回 resolve 後、大きなレイヤーのビットマップが届くたびに呼ばれる
             const handleDeferred = (entries: LayerThumbEntry[], _done: boolean) => {
                 if (!tabStillTargeted()) return;
+
                 // 現在のタブの psd を取得して entries をマージ
                 const currentTab = tabsRef.current.find((t: any) => t.id === targetId);
                 if (!currentTab?.psd) return;
-                const merged = attachThumbs(currentTab.psd as PsdRoot, entries);
+
+                const validEntries = entries.filter((e) => e.bitmap !== null);
+                const merged = attachThumbs(currentTab.psd as PsdRoot, validEntries as any);
                 tabManager.updateTab(targetId, { psd: merged });
-                // アクティブタブなら history も更新
+
+                // ★ FIX: アクティブタブの場合はresetHistoryも呼んでpsd stateを更新し
+                //         drawCanvasのuseEffectが再実行されるようにする
                 if (activeIdRef.current === targetId) {
                     resetHistory(merged);
                 }
