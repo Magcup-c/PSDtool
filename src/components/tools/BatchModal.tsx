@@ -60,7 +60,7 @@ export const BatchModal = ({ language, onClose }: Props) => {
     const [result,    setResult]    = useState<BatchResult | null>(null);
     const [error,     setError]     = useState('');
 
-    const { logs, clearLogs } = useToolProgress(running);
+    const { logs, clearLogs } = useToolProgress();
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

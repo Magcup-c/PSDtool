@@ -79,7 +79,7 @@ export const SpriteModal = ({ language, onClose }: Props) => {
     const [result,     setResult]     = useState<SpriteResult | null>(null);
     const [error,      setError]      = useState('');
 
-    const { logs, clearLogs } = useToolProgress(running);
+    const { logs, clearLogs } = useToolProgress();
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

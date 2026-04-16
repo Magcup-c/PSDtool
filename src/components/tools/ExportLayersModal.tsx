@@ -34,7 +34,6 @@ const L = {
         noInput:    '入力ファイルを選択してください',
         noOutput:   '出力フォルダを選択してください',
         errors:     'エラー詳細',
-        visibleOnly: '可視レイヤーのみ',
     },
     en: {
         title:      'Export Layers',
@@ -53,7 +52,6 @@ const L = {
         noInput:    'Please select an input file',
         noOutput:   'Please select an output folder',
         errors:     'Error Details',
-        visibleOnly: 'Visible layers only',
     },
 } as const;
 
@@ -71,12 +69,11 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
     const [inputPath,  setInputPath]  = useState('');
     const [outputDir,  setOutputDir]  = useState('');
     const [format,     setFormat]     = useState<Fmt>('png');
-    const [visibleOnly, setVisibleOnly] = useState(false);
     const [running,    setRunning]    = useState(false);
     const [result,     setResult]     = useState<ExportLayersResult | null>(null);
     const [error,      setError]      = useState('');
 
-    const { logs, clearLogs } = useToolProgress(running);
+    const { logs, clearLogs } = useToolProgress();
 
     useEffect(() => {
         if (!inputPath && currentFilePath) setInputPath(currentFilePath);
@@ -107,7 +104,7 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
         setResult(null);
         try {
             const res = await invoke<ExportLayersResult>('run_export_layers', {
-                input: inputPath, outputDir, format, visibleOnly,
+                input: inputPath, outputDir, format, visibleOnly: false,
             });
             setResult(res);
         } catch (e) {
@@ -115,7 +112,7 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
         } finally {
             setRunning(false);
         }
-    }, [inputPath, outputDir, format, visibleOnly, t, clearLogs]);
+    }, [inputPath, outputDir, format, t, clearLogs]);
 
     return (
         <div className="tool-modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -156,19 +153,6 @@ export const ExportLayersModal = ({ language, currentFilePath, onClose }: Props)
                                 </button>
                             ))}
                         </div>
-                    </div>
-                    
-                    <div className="tool-field">
-                        <label className="tool-label" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                            <input
-                                type="checkbox"
-                                checked={visibleOnly}
-                                onChange={e => setVisibleOnly(e.target.checked)}
-                                disabled={running}
-                                style={{ width: 14, height: 14, cursor: 'pointer' }}
-                            />
-                            <span>{t.visibleOnly}</span>
-                        </label>
                     </div>
 
                     {error && <div className="tool-error"><AlertCircle size={13} /><span>{error}</span></div>}

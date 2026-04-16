@@ -3262,3 +3262,144 @@ canvas {
 .tool-log-error .tool-log-message {
     color: #e05555;
 }
+
+/* =============================================================================
+   TOOL LOG PANEL  (PsdEditor.css 末尾に追記)
+   Batch / Export Layers / Compare / Sprite の進捗ログ表示
+============================================================================= */
+
+.tool-log-panel {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    overflow: hidden;
+    animation: loadingFadeIn 0.18s ease;
+}
+
+/* ヘッダー行 */
+.tool-log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 10px;
+    background: var(--bg-titlebar);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.tool-log-title {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-3);
+}
+
+/* 実行中スピナー（ヘッダー右端） */
+.tool-log-spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--line-mid);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+/* ログ本体スクロール領域 */
+.tool-log-body {
+    max-height: 180px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 4px 0;
+    background: var(--bg-panel);
+    scroll-behavior: smooth;
+}
+
+.tool-log-body::-webkit-scrollbar {
+    width: 2px;
+}
+.tool-log-body::-webkit-scrollbar-thumb {
+    background: var(--line-mid);
+    border-radius: 99px;
+}
+
+/* 各ログ行 */
+.tool-log-row {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 2px 10px;
+    min-height: 20px;
+    line-height: 1.5;
+}
+
+.tool-log-row:last-child {
+    padding-bottom: 4px;
+}
+
+/* レベルバッジ */
+.tool-log-badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+    min-width: 30px;
+    text-align: center;
+    padding: 1px 4px;
+    border-radius: 2px;
+    border: 1px solid transparent;
+}
+
+/* メッセージテキスト */
+.tool-log-message {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--fg-2);
+    line-height: 1.5;
+    word-break: break-all;
+    flex: 1;
+    min-width: 0;
+}
+
+/* ── レベル別カラー ── */
+
+.tool-log-info .tool-log-badge {
+    color: var(--fg-3);
+    border-color: var(--line);
+    background: transparent;
+}
+.tool-log-info .tool-log-message {
+    color: var(--fg-2);
+}
+
+.tool-log-success .tool-log-badge {
+    color: var(--accent);
+    border-color: rgba(from var(--accent) r g b / 0.3);
+    background: var(--accent-sub);
+}
+.tool-log-success .tool-log-message {
+    color: var(--fg);
+}
+
+.tool-log-warn .tool-log-badge {
+    color: #f97316;
+    border-color: rgba(249, 115, 22, 0.3);
+    background: rgba(249, 115, 22, 0.06);
+}
+.tool-log-warn .tool-log-message {
+    color: var(--fg-2);
+}
+
+.tool-log-error .tool-log-badge {
+    color: #e05555;
+    border-color: rgba(220, 60, 60, 0.3);
+    background: rgba(220, 60, 60, 0.06);
+}
+.tool-log-error .tool-log-message {
+    color: #e05555;
+}

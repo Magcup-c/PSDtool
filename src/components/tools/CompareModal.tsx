@@ -78,7 +78,7 @@ export const CompareModal = ({ language, currentFilePath, onClose }: Props) => {
     const [result,    setResult]    = useState<CompareResult | null>(null);
     const [error,     setError]     = useState('');
 
-    const { logs, clearLogs } = useToolProgress(running);
+    const { logs, clearLogs } = useToolProgress();
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
