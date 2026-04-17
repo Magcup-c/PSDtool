@@ -39,31 +39,71 @@ export interface WorkerDeferredResponse {
 const IMMEDIATE_THRESHOLD_PX = 512 * 512;
 const DEFERRED_BATCH_SIZE = 8;
 
-// ── OffscreenCanvas 完全除去 ────────
+// ── PSD → シリアライズ可能オブジェクトへの変換 ──────────────────────────────
+//
+// ag-psd の Psd / PsdLayer はクラスインスタンスで、
+// プロパティの多くが getter / non-enumerable として定義されている。
+// `for...in` や `JSON.stringify → parse` では欠落するため、
+// 必要なフィールドを明示的に抽出してプレーンオブジェクトを作る。
 
-function removeCanvasDeep(obj: any): any {
-  if (!obj || typeof obj !== 'object') return obj;
-  if (typeof OffscreenCanvas !== 'undefined' && obj instanceof OffscreenCanvas) {
-    return undefined;
+interface PlainLayer {
+  name?: string;
+  hidden?: boolean;
+  opacity?: number;
+  left?: number;
+  top?: number;
+  right?: number;
+  bottom?: number;
+  width?: number;
+  height?: number;
+  children?: PlainLayer[];
+}
+
+interface PlainPsd {
+  width: number;
+  height: number;
+  children: PlainLayer[];
+}
+
+function serializeLayer(layer: any): PlainLayer {
+  const plain: PlainLayer = {};
+
+  // ag-psd PsdLayer の既知フィールドを明示的に取り出す
+  if (layer.name     !== undefined) plain.name     = layer.name;
+  if (layer.hidden   !== undefined) plain.hidden   = layer.hidden;
+  if (layer.opacity  !== undefined) plain.opacity  = layer.opacity;
+  if (layer.left     !== undefined) plain.left     = layer.left;
+  if (layer.top      !== undefined) plain.top      = layer.top;
+  if (layer.right    !== undefined) plain.right    = layer.right;
+  if (layer.bottom   !== undefined) plain.bottom   = layer.bottom;
+
+  // width / height は right-left / bottom-top から計算されることがある
+  const w = layer.width  ?? ((layer.right  ?? 0) - (layer.left ?? 0));
+  const h = layer.height ?? ((layer.bottom ?? 0) - (layer.top  ?? 0));
+  if (w) plain.width  = w;
+  if (h) plain.height = h;
+
+  if (Array.isArray(layer.children) && layer.children.length > 0) {
+    plain.children = layer.children.map(serializeLayer);
   }
-  if (Array.isArray(obj)) {
-    return obj.map(removeCanvasDeep);
-  }
-  const result: any = {};
-  for (const key in obj) {
-    const value = obj[key];
-    if (typeof OffscreenCanvas !== 'undefined' && value instanceof OffscreenCanvas) {
-      continue;
-    }
-    result[key] = removeCanvasDeep(value);
-  }
-  return result;
+
+  return plain;
+}
+
+function serializePsd(psd: any): PlainPsd {
+  return {
+    width:    psd.width,
+    height:   psd.height,
+    children: Array.isArray(psd.children)
+      ? psd.children.map(serializeLayer)
+      : [],
+  };
 }
 
 // ── bitmap 変換 ─────────────────────
 
 async function canvasToBitmap(canvas: OffscreenCanvas): Promise<ImageBitmap | null> {
-  if (!canvas.width || !canvas.height) return null;
+  if (!canvas || !canvas.width || !canvas.height) return null;
   try {
     return await createImageBitmap(canvas);
   } catch (err) {
@@ -87,17 +127,11 @@ interface CollectResult {
 /**
  * PSD レイヤーツリーを再帰的に走査し、bitmap を収集する。
  *
- * 各レイヤーは必ず以下の三分岐のいずれか一つのみで処理する:
- *   1. children あり  → グループとして再帰。グループ自体は bitmap 不要。
- *   2. canvas あり    → 小さければ即時 bitmap 化、大きければ deferred。
- *   3. それ以外       → canvas なし(空・調整レイヤー等)として null を登録。
- *
- * 旧実装では「canvas なし → push(null)」と「children あり → 再帰」が
- * 独立した if 文で並列評価されていたため重複・欠落が発生していた。
- * 三分岐にすることで各レイヤーは必ず一度だけ処理される。
+ * インデックス i は ag-psd が返す順序そのまま使用する。
+ * attachThumbs / walk も同じ順序で走査するため、key が一致する。
  */
 async function collectLayerBitmaps(
-  layers: PsdLayerNode[],
+  layers: any[],
   parentPath: number[] = [],
 ): Promise<CollectResult> {
   const immediate: LayerThumbEntry[] = [];
@@ -109,8 +143,8 @@ async function collectLayerBitmaps(
     const left = layer.left ?? 0;
     const top  = layer.top  ?? 0;
 
-    if (layer.children?.length) {
-      // ① グループ: 自身は bitmap 不要、子を再帰処理
+    if (Array.isArray(layer.children) && layer.children.length > 0) {
+      // ① グループ: 子を再帰処理（グループ自身は bitmap 不要）
       tasks.push(
         collectLayerBitmaps(layer.children, [...parentPath, i]).then((r) => {
           immediate.push(...r.immediate);
@@ -132,7 +166,7 @@ async function collectLayerBitmaps(
         deferred.push({ key, canvas, left, top });
       }
     } else {
-      // ③ canvas なし (空・調整・テキストレイヤー等)
+      // ③ canvas なし（空・調整・テキストレイヤー等）
       immediate.push({ key, bitmap: null, left, top });
     }
   });
@@ -150,7 +184,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   if (!buffer || buffer.byteLength === 0) {
     (self as any).postMessage({
       id,
-      psd: {} as Psd,
+      psd: { width: 0, height: 0, children: [] },
       layers: [],
       error: 'Empty buffer',
     });
@@ -163,19 +197,24 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       skipCompositeImageData: false,
     });
 
-    const { immediate, deferred } = psd.children
+    const { immediate, deferred } = (Array.isArray(psd.children) && psd.children.length > 0)
       ? await collectLayerBitmaps(psd.children)
       : { immediate: [], deferred: [] };
 
-    // 送信前に OffscreenCanvas を完全除去（postMessage 転送不可のため）
-    const safePsd = removeCanvasDeep(psd);
+    // canvas を含まないプレーンオブジェクトに変換
+    // （OffscreenCanvas は postMessage で structuredClone できないため）
+    const safePsd = serializePsd(psd);
 
     const hasPending = deferred.length > 0;
 
     // ── 初回送信 ──
+    const immediateBitmaps = immediate
+      .filter(e => e.bitmap != null)
+      .map(e => e.bitmap!);
+
     (self as any).postMessage(
       { id, psd: safePsd, layers: immediate, hasPending },
-      immediate.filter(e => e.bitmap != null).map(e => e.bitmap!),
+      immediateBitmaps,
     );
 
     if (!hasPending) return;
@@ -194,16 +233,20 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         })),
       );
 
+      const deferredBitmaps = results
+        .filter(e => e.bitmap != null)
+        .map(e => e.bitmap!);
+
       (self as any).postMessage(
         { kind: 'deferred', id, layers: results, done },
-        results.filter(e => e.bitmap != null).map(e => e.bitmap!),
+        deferredBitmaps,
       );
     }
 
   } catch (err) {
     (self as any).postMessage({
       id,
-      psd: {} as Psd,
+      psd: { width: 0, height: 0, children: [] },
       layers: [],
       error: String(err),
     });

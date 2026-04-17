@@ -3,7 +3,6 @@ use std::path::Path;
 // ── PSD 読み込み ─────────────────────────────────────────────────────────────
 
 pub fn load_psd(input: &str) -> Result<psd::Psd, String> {
-    // ファイル存在チェック
     let path = Path::new(input);
     if !path.exists() {
         return Err(format!("File not found: '{}'", input));
@@ -11,7 +10,6 @@ pub fn load_psd(input: &str) -> Result<psd::Psd, String> {
     if !path.is_file() {
         return Err(format!("Path is not a file: '{}'", input));
     }
-    // 拡張子チェック（警告のみ、強制はしない）
     match path.extension().and_then(|e| e.to_str()) {
         Some(ext) if ext.eq_ignore_ascii_case("psd") => {}
         Some(ext) => eprintln!("Warning: unexpected extension '.{}' for '{}'", ext, input),
@@ -24,7 +22,6 @@ pub fn load_psd(input: &str) -> Result<psd::Psd, String> {
     if data.len() < 26 {
         return Err(format!("File too small to be a valid PSD: '{}' ({} bytes)", input, data.len()));
     }
-    // PSD マジックバイト検証: "8BPS"
     if &data[..4] != b"8BPS" {
         return Err(format!(
             "Invalid PSD signature in '{}' (got {:?}, expected \"8BPS\")",
@@ -44,11 +41,9 @@ pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String
     let height = psd_file.height();
 
     if width == 0 || height == 0 {
-        return Err(format!(
-            "PSD has zero dimension: {}×{}", width, height
-        ));
+        return Err(format!("PSD has zero dimension: {}×{}", width, height));
     }
-    // 非常に大きなファイルへの警告（>200MP）
+
     let megapixels = (width as u64 * height as u64) as f64 / 1_000_000.0;
     if megapixels > 200.0 {
         eprintln!("Warning: Large PSD ({:.1}MP) — this may use significant memory", megapixels);
@@ -64,9 +59,35 @@ pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String
     }
 
     image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| format!(
-            "Failed to create image from raw bytes ({}×{})", width, height
-        ))
+        .ok_or_else(|| format!("Failed to create image from raw bytes ({}×{})", width, height))
+}
+
+/// psd crate の PsdLayer から RGBA 画像を安全に生成する。
+///
+/// psd crate v0.3.x の `layer.rgba()` はレイヤーの生ピクセルデータを
+/// インターリーブ RGBA (R,G,B,A,R,G,B,A,...) で返す。
+/// ただし一部のレイヤー（調整レイヤー、空レイヤー）は
+/// ゼロ次元またはゼロバイトのデータを返す場合がある。
+pub fn layer_to_rgba_image(layer: &psd::PsdLayer) -> Option<image::RgbaImage> {
+    let w = layer.width() as u32;
+    let h = layer.height() as u32;
+
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    let pixel_data = layer.rgba();
+    let expected = (w * h * 4) as usize;
+
+    if pixel_data.len() != expected {
+        eprintln!(
+            "Warning: layer '{}' rgba data mismatch: got {} bytes, expected {} ({}×{}×4). Skipping.",
+            layer.name(), pixel_data.len(), expected, w, h
+        );
+        return None;
+    }
+
+    image::RgbaImage::from_raw(w, h, pixel_data)
 }
 
 pub fn psd_to_png_bytes(psd_file: &psd::Psd) -> Result<Vec<u8>, String> {
@@ -78,7 +99,6 @@ pub fn encode_image_rgba(img: &image::RgbaImage, format: &str) -> Result<Vec<u8>
     let mut buf = std::io::Cursor::new(Vec::new());
     let fmt = image_format(format);
     if matches!(fmt, image::ImageFormat::Jpeg) {
-        // JPEG はアルファチャンネルを持てないので RGB に変換
         let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
         rgb.write_to(&mut buf, fmt)
             .map_err(|e| format!("JPEG encode error: {}", e))?;
@@ -143,7 +163,6 @@ pub fn sanitize_name(name: &str) -> String {
         .trim()
         .replace(' ', "_");
 
-    // 空になってしまった場合のフォールバック
     if sanitized.is_empty() {
         "unnamed_layer".to_string()
     } else {

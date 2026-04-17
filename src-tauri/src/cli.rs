@@ -132,19 +132,21 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
     println!("Exporting layers from '{}' → '{}'\n", input, output_dir);
 
     for layer in psd.layers() {
-        if visible_only && !layer.visible() { skipped += 1; continue; }
+        if visible_only && !layer.visible() {
+            skipped += 1;
+            continue;
+        }
 
         let layer_name = sanitize_name(layer.name());
-        let (w, h) = (layer.width() as u32, layer.height() as u32);
-        if w == 0 || h == 0 { skipped += 1; continue; }
 
-        // psd crate の rgba() はインターリーブ形式 (R,G,B,A,R,G,B,A,...) で返す
-        // 以前あった「平面形式→インターリーブ変換」は誤りだったため削除
-        let pixel_data = layer.rgba();
-
-        let img = match image::RgbaImage::from_raw(w, h, pixel_data) {
-            Some(i) => i,
-            None    => { skipped += 1; continue; }
+        // layer_to_rgba_image でサイズチェックとデータ検証を行う
+        let img = match layer_to_rgba_image(&layer) {
+            Some(img) => img,
+            None => {
+                eprintln!("  skip (zero-size or invalid): {}", layer.name());
+                skipped += 1;
+                continue;
+            }
         };
 
         let mut out_path = Path::new(output_dir).join(format!("{}.{}", layer_name, ext));
@@ -157,7 +159,7 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
         let bytes = encode_image_rgba(&img, format)?;
         save_bytes(&out_path.to_string_lossy(), &bytes)?;
         count += 1;
-        println!("  ✓ {}  ({}×{})", out_path.file_name().unwrap_or_default().to_string_lossy(), w, h);
+        println!("  ✓ {}  ({}×{})", out_path.file_name().unwrap_or_default().to_string_lossy(), img.width(), img.height());
     }
     println!("\nDone — {} exported, {} skipped", count, skipped);
     Ok(())
