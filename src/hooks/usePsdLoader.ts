@@ -2,9 +2,12 @@
  * src/hooks/usePsdLoader.ts
  *
  * 修正点:
- *   - 遅延ビットマップ(deferred)がアクティブタブに届いた時にresetHistoryを呼び
- *     drawCanvasが再実行されるようにする
- *   - エラーメッセージの詳細化（既存）
+ *   - handleDeferred で tabsRef.current を参照していたため、
+ *     React の非同期 setState により複数 deferred batch が来た時に
+ *     古い psd を参照してしまい、前の batch 結果が上書き消去される
+ *     race condition を修正。
+ *   - latestPsdByTabRef (Map<tabId, PsdRoot>) を導入し、
+ *     React state の更新を待たずに常に最新 psd を参照できるようにした。
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -48,9 +51,16 @@ export const usePsdLoader = ({
     activeIdRef,
     tabsRef,
 }: UsePsdLoaderProps) => {
-    const loadGenByTabRef = useRef<Map<string, number>>(new Map());
-    const loadCountRef    = useRef(0);
-    const isFirstLoadRef  = useRef(true);
+    const loadGenByTabRef     = useRef<Map<string, number>>(new Map());
+    const loadCountRef        = useRef(0);
+    const isFirstLoadRef      = useRef(true);
+
+    // ★ 修正の核心: タブごとの「最新 psd」を React state とは独立して追跡する
+    // React の setState は非同期なので、連続する deferred batch が来た時に
+    // tabsRef.current がまだ古い psd を持っている。
+    // このマップは updateTab/handleDeferred のたびに同期的に更新するため
+    // 常に最新の psd を参照できる。
+    const latestPsdByTabRef = useRef<Map<string, PsdRoot>>(new Map());
 
     const loadPsdFromFilePath = useCallback(async (filePath: string, tabId?: string) => {
         if (tabManager.activateExistingTab(filePath)) return;
@@ -68,8 +78,14 @@ export const usePsdLoader = ({
         setIsLoading(true);
         isFirstLoadRef.current = true;
 
+        // このタブの読み込みがまだ有効か確認
         const tabStillTargeted = () =>
             loadGenByTabRef.current.get(targetId) === g;
+
+        // タブ切り替え等でこのタブの読み込みが無効になったら latestPsd も削除
+        const cleanup = () => {
+            latestPsdByTabRef.current.delete(targetId);
+        };
 
         try {
             let data: { buffer: ArrayBuffer };
@@ -81,26 +97,31 @@ export const usePsdLoader = ({
                 );
             }
 
-            if (!tabStillTargeted()) return;
+            if (!tabStillTargeted()) { cleanup(); return; }
 
             if (!data.buffer || data.buffer.byteLength === 0) {
                 throw new Error(`File "${filePath}" is empty`);
             }
 
-            // ── 遅延ビットマップのマージハンドラ ────────────────────────────
+            // ── deferred bitmap 受信ハンドラ ────────────────────────────────
+            // ★ tabsRef ではなく latestPsdByTabRef から最新 psd を取得することで
+            //    React の非同期 setState に依存しない。
+            //    batch1 完了 → latestPsdByTabRef 更新 → batch2 完了時には batch1 反映済み psd を参照
             const handleDeferred = (entries: LayerThumbEntry[], _done: boolean) => {
                 if (!tabStillTargeted()) return;
 
-                // 現在のタブの psd を取得して entries をマージ
-                const currentTab = tabsRef.current.find((t: any) => t.id === targetId);
-                if (!currentTab?.psd) return;
+                const basePsd = latestPsdByTabRef.current.get(targetId);
+                if (!basePsd) return;
 
-                const validEntries = entries.filter((e) => e.bitmap !== null);
-                const merged = attachThumbs(currentTab.psd as PsdRoot, validEntries as any);
+                const validEntries = entries.filter((e) => e.bitmap !== null) as any[];
+                const merged = attachThumbs(basePsd, validEntries);
+
+                // React state の更新を待たずに即座に最新 psd を記録
+                latestPsdByTabRef.current.set(targetId, merged);
+
                 tabManager.updateTab(targetId, { psd: merged });
 
-                // ★ FIX: アクティブタブの場合はresetHistoryも呼んでpsd stateを更新し
-                //         drawCanvasのuseEffectが再実行されるようにする
+                // アクティブタブなら history も更新
                 if (activeIdRef.current === targetId) {
                     resetHistory(merged);
                 }
@@ -108,7 +129,7 @@ export const usePsdLoader = ({
 
             const result = await loadPsd(data.buffer, filePath, handleDeferred);
 
-            if (!tabStillTargeted()) return;
+            if (!tabStillTargeted()) { cleanup(); return; }
             if (!result?.psd) {
                 throw new Error('Worker returned an invalid PSD result');
             }
@@ -118,7 +139,12 @@ export const usePsdLoader = ({
                 ? attachThumbs(rawPsd, result.layers)
                 : rawPsd;
 
-            if (!tabStillTargeted()) return;
+            if (!tabStillTargeted()) { cleanup(); return; }
+
+            // ★ updateTab より先に latestPsdByTabRef を更新しておく
+            //    こうすることで、この直後に来る deferred batch が
+            //    nextPsd を確実に参照できる
+            latestPsdByTabRef.current.set(targetId, nextPsd);
 
             if (activeIdRef.current === targetId) resetHistory(nextPsd);
 
@@ -138,6 +164,7 @@ export const usePsdLoader = ({
                 showToast(`${L.loadFailed}: ${msg}`, 'error');
                 tabManager.updateTab(targetId, { isLoading: false });
             }
+            cleanup();
         } finally {
             if (loadGenByTabRef.current.get(targetId) === g) {
                 loadGenByTabRef.current.delete(targetId);

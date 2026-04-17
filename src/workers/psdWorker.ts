@@ -39,42 +39,35 @@ export interface WorkerDeferredResponse {
 const IMMEDIATE_THRESHOLD_PX = 512 * 512;
 const DEFERRED_BATCH_SIZE = 8;
 
-// ── OffscreenCanvas完全除去 ─────────
+// ── OffscreenCanvas 完全除去 ────────
 
 function removeCanvasDeep(obj: any): any {
   if (!obj || typeof obj !== 'object') return obj;
-
   if (typeof OffscreenCanvas !== 'undefined' && obj instanceof OffscreenCanvas) {
     return undefined;
   }
-
   if (Array.isArray(obj)) {
     return obj.map(removeCanvasDeep);
   }
-
   const result: any = {};
   for (const key in obj) {
     const value = obj[key];
-
     if (typeof OffscreenCanvas !== 'undefined' && value instanceof OffscreenCanvas) {
       continue;
     }
-
     result[key] = removeCanvasDeep(value);
   }
-
   return result;
 }
 
-// ── bitmap変換 ─────────────────────
+// ── bitmap 変換 ─────────────────────
 
 async function canvasToBitmap(canvas: OffscreenCanvas): Promise<ImageBitmap | null> {
   if (!canvas.width || !canvas.height) return null;
-
   try {
     return await createImageBitmap(canvas);
   } catch (err) {
-    console.warn('[psdWorker] bitmap失敗:', err);
+    console.warn('[psdWorker] bitmap 変換失敗:', err);
     return null;
   }
 }
@@ -91,11 +84,22 @@ interface CollectResult {
   }>;
 }
 
+/**
+ * PSD レイヤーツリーを再帰的に走査し、bitmap を収集する。
+ *
+ * 各レイヤーは必ず以下の三分岐のいずれか一つのみで処理する:
+ *   1. children あり  → グループとして再帰。グループ自体は bitmap 不要。
+ *   2. canvas あり    → 小さければ即時 bitmap 化、大きければ deferred。
+ *   3. それ以外       → canvas なし(空・調整レイヤー等)として null を登録。
+ *
+ * 旧実装では「canvas なし → push(null)」と「children あり → 再帰」が
+ * 独立した if 文で並列評価されていたため重複・欠落が発生していた。
+ * 三分岐にすることで各レイヤーは必ず一度だけ処理される。
+ */
 async function collectLayerBitmaps(
   layers: PsdLayerNode[],
   parentPath: number[] = [],
 ): Promise<CollectResult> {
-
   const immediate: LayerThumbEntry[] = [];
   const deferred: CollectResult['deferred'] = [];
   const tasks: Promise<void>[] = [];
@@ -106,7 +110,7 @@ async function collectLayerBitmaps(
     const top  = layer.top  ?? 0;
 
     if (layer.children?.length) {
-      // グループ: canvas は使わず子を再帰処理
+      // ① グループ: 自身は bitmap 不要、子を再帰処理
       tasks.push(
         collectLayerBitmaps(layer.children, [...parentPath, i]).then((r) => {
           immediate.push(...r.immediate);
@@ -114,7 +118,7 @@ async function collectLayerBitmaps(
         }),
       );
     } else if (layer.canvas) {
-      // 通常レイヤー: canvas → bitmap 変換
+      // ② 通常レイヤー: canvas → bitmap 変換
       const canvas = layer.canvas as OffscreenCanvas;
       const px = (canvas.width || 0) * (canvas.height || 0);
 
@@ -125,11 +129,10 @@ async function collectLayerBitmaps(
           }),
         );
       } else {
-        // 大きいレイヤーは遅延送信
         deferred.push({ key, canvas, left, top });
       }
     } else {
-      // canvas なし (空レイヤー・調整レイヤー等): null として登録
+      // ③ canvas なし (空・調整・テキストレイヤー等)
       immediate.push({ key, bitmap: null, left, top });
     }
   });
@@ -164,47 +167,36 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       ? await collectLayerBitmaps(psd.children)
       : { immediate: [], deferred: [] };
 
-    // 送信前に OffscreenCanvas を完全除去
+    // 送信前に OffscreenCanvas を完全除去（postMessage 転送不可のため）
     const safePsd = removeCanvasDeep(psd);
 
     const hasPending = deferred.length > 0;
 
     // ── 初回送信 ──
     (self as any).postMessage(
-      {
-        id,
-        psd: safePsd,
-        layers: immediate,
-        hasPending,
-      },
-      immediate
-        .filter(e => e.bitmap)
-        .map(e => e.bitmap!)
+      { id, psd: safePsd, layers: immediate, hasPending },
+      immediate.filter(e => e.bitmap != null).map(e => e.bitmap!),
     );
 
     if (!hasPending) return;
 
-    // ── 遅延送信 ──
+    // ── 遅延送信: 大きいレイヤーをバッチで順次送信 ──
     for (let i = 0; i < deferred.length; i += DEFERRED_BATCH_SIZE) {
       const batch = deferred.slice(i, i + DEFERRED_BATCH_SIZE);
+      const done  = i + DEFERRED_BATCH_SIZE >= deferred.length;
 
       const results = await Promise.all(
-        batch.map(async ({ key, canvas, left, top }) => {
-          const bitmap = await canvasToBitmap(canvas);
-          return { key, bitmap, left, top };
-        }),
+        batch.map(async ({ key, canvas, left, top }) => ({
+          key,
+          bitmap: await canvasToBitmap(canvas),
+          left,
+          top,
+        })),
       );
 
       (self as any).postMessage(
-        {
-          kind: 'deferred',
-          id,
-          layers: results,
-          done: i + DEFERRED_BATCH_SIZE >= deferred.length,
-        },
-        results
-          .filter(e => e.bitmap)
-          .map(e => e.bitmap!)
+        { kind: 'deferred', id, layers: results, done },
+        results.filter(e => e.bitmap != null).map(e => e.bitmap!),
       );
     }
 
