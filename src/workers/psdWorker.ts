@@ -1,5 +1,4 @@
 import { readPsd, initializeCanvas, Psd } from 'ag-psd';
-import { PsdLayerNode } from '../types';
 
 initializeCanvas(
   (width: number, height: number) => new OffscreenCanvas(width, height) as any,
