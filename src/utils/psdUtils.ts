@@ -1,19 +1,8 @@
-/**
- * src/utils/psdUtils.ts  (updated)
- *
- * 変更点:
- *   - cacheDataUrls()  → 削除（Worker 側で ImageBitmap に置き換え）
- *   - refreshLayerThumb() → 削除（同上）
- *   - attachThumbs()   → 新規追加
- *       Worker から返ってきた LayerThumbEntry[] を
- *       PSD ツリーの layer._thumb に注入する純粋関数。
- */
-
 import { PsdLayerNode, SearchResult, PsdRoot } from '../types';
 
 export interface LayerThumbEntry {
     key: string;
-    bitmap: ImageBitmap;
+    bitmap: ImageBitmap | null;
     left: number;
     top: number;
 }
@@ -28,32 +17,43 @@ export function getLayersAtPath(children: PsdLayerNode[], parentPath: number[]):
 }
 
 /**
- * Worker から返ってきた LayerThumbEntry[] を PSD ツリーに注入し、
- * 新しい Psd オブジェクトを返す（イミュータブル）。
+ * Worker から返ってきた LayerThumbEntry[] を PSD ツリーに注入する。
  *
- *   layer._bitmap — 描画用 + サムネイル用を兼ねるフルサイズ ImageBitmap
- *
- * layer オブジェクト自体を新しい参照に置き換えるため、
- * React.memo のキャッシュが正しく無効化されてサムネイルが再描画される。
+ * - bitmap が null のエントリは _bitmap をセットしない (undefined のまま)
+ *   → drawCanvas / LayerThumbnail で「サムネなし」として正しく扱われる
+ * - グループレイヤーは map に存在しないため { ...layer } のままになる
+ * - children を持つレイヤーは再帰的に処理する
  */
 export function attachThumbs(psd: PsdRoot, entries: LayerThumbEntry[]): PsdRoot {
-    const map = new Map(entries.map((e) => [e.key, e]));
+    // bitmap が存在するエントリのみ map に登録
+    // null エントリを map に入れると既存の _bitmap を null で上書きしてしまう
+    const map = new Map<string, ImageBitmap>();
+    for (const e of entries) {
+        if (e.bitmap != null) {
+            map.set(e.key, e.bitmap);
+        }
+    }
 
     function walk(nodes: PsdLayerNode[], parentPath: number[]): PsdLayerNode[] {
         return nodes.map((layer, i) => {
             const key = [...parentPath, i].join('-');
-            const entry = map.get(key);
-            const next = entry
-                ? { ...layer, _bitmap: entry.bitmap }
+            const bitmap = map.get(key);
+
+            // bitmap がある場合のみ _bitmap をセット、ない場合は既存を維持
+            const next: PsdLayerNode = bitmap != null
+                ? { ...layer, _bitmap: bitmap }
                 : { ...layer };
-            if (next.children?.length) {
+
+            // children は再帰処理
+            if (Array.isArray(next.children)) {
                 next.children = walk(next.children, [...parentPath, i]);
             }
+
             return next;
         });
     }
 
-    return { ...psd, children: walk(psd.children ?? [], []) } as any;
+    return { ...psd, children: walk(psd.children ?? [], []) };
 }
 
 export function updateLayerByPath(
