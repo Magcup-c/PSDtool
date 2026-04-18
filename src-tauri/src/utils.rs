@@ -51,6 +51,7 @@ pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String
 
     let rgba = psd_file.rgba();
     let expected = (width * height * 4) as usize;
+
     if rgba.len() != expected {
         return Err(format!(
             "Unexpected RGBA data length: got {} bytes, expected {} ({}×{}×4)",
@@ -60,34 +61,6 @@ pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String
 
     image::RgbaImage::from_raw(width, height, rgba)
         .ok_or_else(|| format!("Failed to create image from raw bytes ({}×{})", width, height))
-}
-
-/// psd crate の PsdLayer から RGBA 画像を安全に生成する。
-///
-/// psd crate v0.3.x の `layer.rgba()` はレイヤーの生ピクセルデータを
-/// インターリーブ RGBA (R,G,B,A,R,G,B,A,...) で返す。
-/// ただし一部のレイヤー（調整レイヤー、空レイヤー）は
-/// ゼロ次元またはゼロバイトのデータを返す場合がある。
-pub fn layer_to_rgba_image(layer: &psd::PsdLayer) -> Option<image::RgbaImage> {
-    let w = layer.width() as u32;
-    let h = layer.height() as u32;
-
-    if w == 0 || h == 0 {
-        return None;
-    }
-
-    let pixel_data = layer.rgba();
-    let expected = (w * h * 4) as usize;
-
-    if pixel_data.len() != expected {
-        eprintln!(
-            "Warning: layer '{}' rgba data mismatch: got {} bytes, expected {} ({}×{}×4). Skipping.",
-            layer.name(), pixel_data.len(), expected, w, h
-        );
-        return None;
-    }
-
-    image::RgbaImage::from_raw(w, h, pixel_data)
 }
 
 pub fn psd_to_png_bytes(psd_file: &psd::Psd) -> Result<Vec<u8>, String> {
@@ -122,9 +95,7 @@ pub fn save_bytes(path: &str, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!(
-                    "Failed to create directory '{}': {}", parent.display(), e
-                ))?;
+                .map_err(|e| format!("Failed to create directory '{}': {}", parent.display(), e))?;
         }
     }
     std::fs::write(path, bytes)

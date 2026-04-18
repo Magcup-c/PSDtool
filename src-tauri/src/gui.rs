@@ -191,10 +191,11 @@ pub async fn run_export_layers(
 
         let ext = image_ext(&format);
 
-        // レイヤーを収集し、エラーチェックを行う
         struct LayerEntry {
             name: String,
-            img: image::RgbaImage,
+            pixel_data: Vec<u8>,
+            w: u32,
+            h: u32,
         }
 
         let mut entries: Vec<LayerEntry> = Vec::new();
@@ -206,27 +207,38 @@ pub async fn run_export_layers(
                 skipped += 1;
                 continue;
             }
-
-            // layer_to_rgba_image でサイズ検証とデータ整合性チェック
-            match layer_to_rgba_image(&layer) {
-                Some(img) => {
-                    entries.push(LayerEntry {
-                        name: sanitize_name(layer.name()),
-                        img,
-                    });
-                }
-                None => {
-                    emit_log(&app, "warn", format!("  skip (zero-size or invalid data): {}", layer.name()));
-                    skipped += 1;
-                }
+            let (w, h) = (layer.width() as u32, layer.height() as u32);
+            if w == 0 || h == 0 {
+                emit_log(&app, "warn", format!("  skip (zero-size): {}", layer.name()));
+                skipped += 1;
+                continue;
             }
+
+            // layer.rgba() は RGBA インターリーブ形式で返す
+            let pixel_data = layer.rgba();
+            let expected = (w * h * 4) as usize;
+
+            if pixel_data.len() != expected {
+                emit_log(&app, "warn", format!(
+                    "  skip (size mismatch) '{}': got {} bytes, expected {} ({}x{}x4)",
+                    layer.name(), pixel_data.len(), expected, w, h
+                ));
+                skipped += 1;
+                continue;
+            }
+
+            entries.push(LayerEntry {
+                name: sanitize_name(layer.name()),
+                pixel_data,
+                w,
+                h,
+            });
         }
 
         emit_log(&app, "info", format!(
             "{} layer(s) to export, {} skipped.", entries.len(), skipped
         ));
 
-        // 出力パスを決定（重複回避）
         let mut named_entries: Vec<(LayerEntry, String)> = Vec::with_capacity(entries.len());
         for entry in entries {
             let mut out_path = std::path::Path::new(&output_dir)
@@ -243,7 +255,10 @@ pub async fn run_export_layers(
         let app2 = app.clone();
         let results: Vec<(String, String, Result<(), String>)> = named_entries.par_iter().map(|(entry, out_str)| {
             let result = (|| {
-                let bytes = encode_image_rgba(&entry.img, &format)?;
+                // RGBA インターリーブデータから直接 RgbaImage を構築
+                let img = image::RgbaImage::from_raw(entry.w, entry.h, entry.pixel_data.clone())
+                    .ok_or_else(|| format!("Failed to create image for '{}'", entry.name))?;
+                let bytes = encode_image_rgba(&img, &format)?;
                 save_bytes(out_str, &bytes)
             })();
 

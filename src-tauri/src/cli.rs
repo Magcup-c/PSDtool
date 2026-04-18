@@ -132,18 +132,31 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
     println!("Exporting layers from '{}' → '{}'\n", input, output_dir);
 
     for layer in psd.layers() {
-        if visible_only && !layer.visible() {
+        if visible_only && !layer.visible() { skipped += 1; continue; }
+
+        let layer_name = sanitize_name(layer.name());
+        let (w, h) = (layer.width() as u32, layer.height() as u32);
+        if w == 0 || h == 0 {
+            println!("  ⚠ skip zero-size: {}", layer.name());
             skipped += 1;
             continue;
         }
 
-        let layer_name = sanitize_name(layer.name());
+        // psd クレート 0.3.5 の rgba() はインターリーブ RGBA を返す
+        let pixel_data = layer.rgba();
+        let expected = (w * h * 4) as usize;
 
-        // layer_to_rgba_image でサイズチェックとデータ検証を行う
-        let img = match layer_to_rgba_image(&layer) {
-            Some(img) => img,
-            None => {
-                eprintln!("  skip (zero-size or invalid): {}", layer.name());
+        if pixel_data.len() != expected {
+            eprintln!("  ⚠ size mismatch for '{}': got {} bytes, expected {} ({}x{}x4)",
+                layer.name(), pixel_data.len(), expected, w, h);
+            skipped += 1;
+            continue;
+        }
+
+        let img = match image::RgbaImage::from_raw(w, h, pixel_data) {
+            Some(i) => i,
+            None    => {
+                eprintln!("  ⚠ from_raw failed for '{}'", layer.name());
                 skipped += 1;
                 continue;
             }
@@ -159,7 +172,7 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
         let bytes = encode_image_rgba(&img, format)?;
         save_bytes(&out_path.to_string_lossy(), &bytes)?;
         count += 1;
-        println!("  ✓ {}  ({}×{})", out_path.file_name().unwrap_or_default().to_string_lossy(), img.width(), img.height());
+        println!("  ✓ {}  ({}×{})", out_path.file_name().unwrap_or_default().to_string_lossy(), w, h);
     }
     println!("\nDone — {} exported, {} skipped", count, skipped);
     Ok(())
