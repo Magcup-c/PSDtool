@@ -121,8 +121,17 @@ pub fn cmd_layers(input: &str, output: &str, show: &[&str], hide: &[&str], list_
     Ok(())
 }
 
+/// CLI 版のレイヤー個別エクスポート。
+///
+/// layer.rgba() の正しい動作:
+///   - psd_width * psd_height * 4 バイトを返す（PSD全体キャンバスサイズ）
+///   - ピクセルはすでに layer_left/layer_top のオフセットで配置済み
+///   - バウンディングボックスだけを切り出すには手動でクロップが必要
 pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_only: bool, _flatten_groups: bool) -> Result<(), String> {
     let psd = load_psd(input)?;
+    let psd_width  = psd.width();
+    let psd_height = psd.height();
+
     std::fs::create_dir_all(output_dir)
         .map_err(|e| format!("Failed to create output dir: {}", e))?;
 
@@ -132,36 +141,64 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
     println!("Exporting layers from '{}' → '{}'\n", input, output_dir);
 
     for layer in psd.layers() {
-        if visible_only && !layer.visible() { skipped += 1; continue; }
-
-        let layer_name = sanitize_name(layer.name());
-        let (w, h) = (layer.width() as u32, layer.height() as u32);
-        if w == 0 || h == 0 {
-            println!("  ⚠ skip zero-size: {}", layer.name());
+        if visible_only && !layer.visible() {
+            println!("  ○ skip (hidden): {}", layer.name());
             skipped += 1;
             continue;
         }
 
-        // psd クレート 0.3.5 の rgba() はインターリーブ RGBA を返す
-        let pixel_data = layer.rgba();
-        let expected = (w * h * 4) as usize;
+        let lw = layer.width()  as u32;
+        let lh = layer.height() as u32;
 
-        if pixel_data.len() != expected {
-            eprintln!("  ⚠ size mismatch for '{}': got {} bytes, expected {} ({}x{}x4)",
-                layer.name(), pixel_data.len(), expected, w, h);
+        if lw == 0 || lh == 0 {
+            println!("  ⚠ skip (zero-size): {}", layer.name());
             skipped += 1;
             continue;
         }
 
-        let img = match image::RgbaImage::from_raw(w, h, pixel_data) {
+        // layer.rgba() は PSD全体サイズの RGBA データを返す
+        let canvas_rgba = layer.rgba();
+        let canvas_expected = (psd_width * psd_height * 4) as usize;
+
+        if canvas_rgba.len() != canvas_expected {
+            eprintln!("  ⚠ skip (canvas size mismatch for '{}'): got {} bytes, expected {}",
+                layer.name(), canvas_rgba.len(), canvas_expected);
+            skipped += 1;
+            continue;
+        }
+
+        // キャンバスからレイヤーのバウンディングボックスを切り出す
+        let left   = layer.layer_left().max(0) as u32;
+        let top    = layer.layer_top().max(0)  as u32;
+        let right  = (layer.layer_left() + lw as i32).min(psd_width  as i32).max(0) as u32;
+        let bottom = (layer.layer_top()  + lh as i32).min(psd_height as i32).max(0) as u32;
+
+        let crop_w = right.saturating_sub(left);
+        let crop_h = bottom.saturating_sub(top);
+
+        if crop_w == 0 || crop_h == 0 {
+            println!("  ⚠ skip (out of canvas): {}", layer.name());
+            skipped += 1;
+            continue;
+        }
+
+        let mut layer_pixels = Vec::with_capacity((crop_w * crop_h * 4) as usize);
+        for y in top..bottom {
+            for x in left..right {
+                let base = ((y * psd_width + x) * 4) as usize;
+                layer_pixels.extend_from_slice(&canvas_rgba[base..base + 4]);
+            }
+        }
+
+        let img = match image::RgbaImage::from_raw(crop_w, crop_h, layer_pixels) {
             Some(i) => i,
-            None    => {
-                eprintln!("  ⚠ from_raw failed for '{}'", layer.name());
-                skipped += 1;
-                continue;
+            None => {
+                eprintln!("  ⚠ from_raw failed for '{}', using blank image", layer.name());
+                image::RgbaImage::new(crop_w, crop_h)
             }
         };
 
+        let layer_name = sanitize_name(layer.name());
         let mut out_path = Path::new(output_dir).join(format!("{}.{}", layer_name, ext));
         let mut idx = 1u32;
         while out_path.exists() {
@@ -172,7 +209,7 @@ pub fn cmd_export_layers(input: &str, output_dir: &str, format: &str, visible_on
         let bytes = encode_image_rgba(&img, format)?;
         save_bytes(&out_path.to_string_lossy(), &bytes)?;
         count += 1;
-        println!("  ✓ {}  ({}×{})", out_path.file_name().unwrap_or_default().to_string_lossy(), w, h);
+        println!("  ✓ {}  ({}×{})", out_path.file_name().unwrap_or_default().to_string_lossy(), crop_w, crop_h);
     }
     println!("\nDone — {} exported, {} skipped", count, skipped);
     Ok(())

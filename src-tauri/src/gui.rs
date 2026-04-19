@@ -185,17 +185,22 @@ pub async fn run_export_layers(
         emit_log(&app, "info", format!("Loading: {}", input));
 
         let psd = load_psd(&input)?;
+        let psd_width  = psd.width();
+        let psd_height = psd.height();
 
         std::fs::create_dir_all(&output_dir)
             .map_err(|e| format!("Failed to create output dir: {}", e))?;
 
         let ext = image_ext(&format);
 
+        // layer.rgba() の正しい動作:
+        //   psd_width * psd_height * 4 バイトを返す（PSD全体キャンバスサイズ）
+        //   ピクセルはすでに layer_left/layer_top のオフセットで配置済み
+        //   バウンディングボックスだけを切り出すには手動でクロップが必要
+
         struct LayerEntry {
             name: String,
-            pixel_data: Vec<u8>,
-            w: u32,
-            h: u32,
+            img: image::RgbaImage,
         }
 
         let mut entries: Vec<LayerEntry> = Vec::new();
@@ -207,31 +212,65 @@ pub async fn run_export_layers(
                 skipped += 1;
                 continue;
             }
-            let (w, h) = (layer.width() as u32, layer.height() as u32);
-            if w == 0 || h == 0 {
+
+            let lw = layer.width()  as u32;
+            let lh = layer.height() as u32;
+
+            if lw == 0 || lh == 0 {
                 emit_log(&app, "warn", format!("  skip (zero-size): {}", layer.name()));
                 skipped += 1;
                 continue;
             }
 
-            // layer.rgba() は RGBA インターリーブ形式で返す
-            let pixel_data = layer.rgba();
-            let expected = (w * h * 4) as usize;
+            // layer.rgba() → PSD全体サイズの RGBA データ
+            let canvas_rgba = layer.rgba();
+            let canvas_expected = (psd_width * psd_height * 4) as usize;
 
-            if pixel_data.len() != expected {
+            if canvas_rgba.len() != canvas_expected {
                 emit_log(&app, "warn", format!(
-                    "  skip (size mismatch) '{}': got {} bytes, expected {} ({}x{}x4)",
-                    layer.name(), pixel_data.len(), expected, w, h
+                    "  skip (canvas size mismatch for '{}'): got {} bytes, expected {}",
+                    layer.name(), canvas_rgba.len(), canvas_expected
                 ));
                 skipped += 1;
                 continue;
             }
 
+            // キャンバス全体からレイヤーのバウンディングボックスを切り出す
+            let left   = layer.layer_left().max(0) as u32;
+            let top    = layer.layer_top().max(0)  as u32;
+            let right  = (layer.layer_left() + lw as i32).min(psd_width  as i32).max(0) as u32;
+            let bottom = (layer.layer_top()  + lh as i32).min(psd_height as i32).max(0) as u32;
+
+            let crop_w = right.saturating_sub(left);
+            let crop_h = bottom.saturating_sub(top);
+
+            if crop_w == 0 || crop_h == 0 {
+                emit_log(&app, "warn", format!("  skip (out of canvas): {}", layer.name()));
+                skipped += 1;
+                continue;
+            }
+
+            let mut layer_pixels = Vec::with_capacity((crop_w * crop_h * 4) as usize);
+            for y in top..bottom {
+                for x in left..right {
+                    let base = ((y * psd_width + x) * 4) as usize;
+                    layer_pixels.extend_from_slice(&canvas_rgba[base..base + 4]);
+                }
+            }
+
+            let img = match image::RgbaImage::from_raw(crop_w, crop_h, layer_pixels) {
+                Some(i) => i,
+                None => {
+                    emit_log(&app, "warn", format!(
+                        "  from_raw failed for '{}', using blank {}×{}", layer.name(), crop_w, crop_h
+                    ));
+                    image::RgbaImage::new(crop_w, crop_h)
+                }
+            };
+
             entries.push(LayerEntry {
                 name: sanitize_name(layer.name()),
-                pixel_data,
-                w,
-                h,
+                img,
             });
         }
 
@@ -253,12 +292,9 @@ pub async fn run_export_layers(
         }
 
         let app2 = app.clone();
-        let results: Vec<(String, String, Result<(), String>)> = named_entries.par_iter().map(|(entry, out_str)| {
+        let results: Vec<(String, Result<(), String>)> = named_entries.par_iter().map(|(entry, out_str)| {
             let result = (|| {
-                // RGBA インターリーブデータから直接 RgbaImage を構築
-                let img = image::RgbaImage::from_raw(entry.w, entry.h, entry.pixel_data.clone())
-                    .ok_or_else(|| format!("Failed to create image for '{}'", entry.name))?;
-                let bytes = encode_image_rgba(&img, &format)?;
+                let bytes = encode_image_rgba(&entry.img, &format)?;
                 save_bytes(out_str, &bytes)
             })();
 
@@ -271,12 +307,12 @@ pub async fn run_export_layers(
                 Ok(_)  => emit_log(&app2, "success", format!("✓ {}", filename)),
                 Err(e) => emit_log(&app2, "error",   format!("✗ {}: {}", entry.name, e)),
             }
-            (entry.name.clone(), out_str.clone(), result)
+            (entry.name.clone(), result)
         }).collect();
 
         let mut count = 0usize;
         let mut errors: Vec<String> = Vec::new();
-        for (name, _, result) in results {
+        for (name, result) in results {
             match result {
                 Ok(_)  => count += 1,
                 Err(e) => errors.push(format!("{}: {}", name, e)),
