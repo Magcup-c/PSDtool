@@ -1,6 +1,11 @@
 /**
  * VirtualLayerList.tsx
  * 仮想スクロール付きレイヤーリスト（ドラッグ中は全行描画して DnD の座標検出を維持）
+ *
+ * 修正: LayerThumbnailCell を canvas 直描画 → ObjectURL + <img> 方式に変更
+ *   - bitmap が null/undefined のレイヤーで _dataUrl フォールバックを使うように
+ *   - ステップダウンスケールで品質向上（LayerThumbnail.tsx と同じロジック）
+ *   - deferred bitmap が後から届いた際も objectUrl が更新されサムネが表示される
  */
 import React, {
     memo, useMemo, useCallback, useRef, useEffect, useState, forwardRef,
@@ -40,43 +45,108 @@ interface VirtualLayerListProps {
 
 const ITEM_HEIGHT = 36;
 const OVERSCAN = 8;
+const THUMB_SIZE = 22;
 
-const THUMB_SIZE = 28;
+// ── ステップダウンスケール ────────────────────────────────────────────────────
+function drawStepDown(
+    ctx: OffscreenCanvasRenderingContext2D,
+    src: ImageBitmap,
+    targetW: number,
+    targetH: number,
+): void {
+    let curW = src.width;
+    let curH = src.height;
+    let cur: OffscreenCanvas | null = null;
 
+    while (curW > targetW * 2 || curH > targetH * 2) {
+        const nextW = Math.max(Math.floor(curW / 2), targetW);
+        const nextH = Math.max(Math.floor(curH / 2), targetH);
+        const tmp = new OffscreenCanvas(nextW, nextH);
+        const tctx = tmp.getContext('2d')!;
+        tctx.imageSmoothingEnabled = true;
+        tctx.imageSmoothingQuality = 'high';
+        if (cur) {
+            tctx.drawImage(cur, 0, 0, nextW, nextH);
+        } else {
+            tctx.drawImage(src, 0, 0, nextW, nextH);
+        }
+        cur = tmp;
+        curW = nextW;
+        curH = nextH;
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    if (cur) {
+        ctx.drawImage(cur, 0, 0, targetW, targetH);
+    } else {
+        ctx.drawImage(src, 0, 0, targetW, targetH);
+    }
+}
+
+// ── サムネイルセル ────────────────────────────────────────────────────────────
 const LayerThumbnailCell = memo(({
-    bitmap, hasChildren,
-}: { bitmap?: ImageBitmap; hasChildren: boolean }) => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
+    bitmap, dataUrl, hasChildren,
+}: { bitmap?: ImageBitmap | null; dataUrl?: string | null; hasChildren: boolean }) => {
+    const [objectUrl, setObjectUrl] = useState<string | null>(null);
 
     useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || !bitmap) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+        if (!bitmap || hasChildren) { setObjectUrl(null); return; }
+        let cancelled = false;
+        let createdUrl: string | null = null;
 
-        canvas.width = THUMB_SIZE;
-        canvas.height = THUMB_SIZE;
-        ctx.clearRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+        (async () => {
+            try {
+                const dpr = Math.max(1, window.devicePixelRatio ?? 1);
+                const canvasPx = Math.round(THUMB_SIZE * dpr);
 
-        const bw = bitmap.width;
-        const bh = bitmap.height;
-        const scale = Math.min(THUMB_SIZE / bw, THUMB_SIZE / bh);
-        const dw = bw * scale;
-        const dh = bh * scale;
-        const dx = (THUMB_SIZE - dw) / 2;
-        const dy = (THUMB_SIZE - dh) / 2;
-        ctx.drawImage(bitmap, 0, 0, bw, bh, dx, dy, dw, dh);
-    }, [bitmap]);
+                const bw = bitmap.width || 1;
+                const bh = bitmap.height || 1;
+                const scale = Math.min(1, canvasPx / bw, canvasPx / bh);
+                const dw = Math.max(1, Math.round(bw * scale));
+                const dh = Math.max(1, Math.round(bh * scale));
+                const dx = Math.floor((canvasPx - dw) / 2);
+                const dy = Math.floor((canvasPx - dh) / 2);
+
+                const oc = new OffscreenCanvas(canvasPx, canvasPx);
+                const ctx = oc.getContext('2d')!;
+
+                const tmp = new OffscreenCanvas(dw, dh);
+                const tctx = tmp.getContext('2d')!;
+                drawStepDown(tctx, bitmap, dw, dh);
+
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(tmp, dx, dy);
+
+                const blob = await oc.convertToBlob({ type: 'image/png' });
+                const url = URL.createObjectURL(blob);
+
+                if (cancelled) { URL.revokeObjectURL(url); return; }
+                createdUrl = url;
+                setObjectUrl(prev => {
+                    if (prev) URL.revokeObjectURL(prev);
+                    return url;
+                });
+            } catch (e) {
+                // bitmap が close() 済みの場合など
+                console.warn('[LayerThumbnailCell] Failed to render thumbnail:', e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            if (createdUrl) URL.revokeObjectURL(createdUrl);
+        };
+    }, [bitmap, hasChildren]);
+
+    // objectUrl → dataUrl の順でフォールバック
+    const src = objectUrl ?? (!hasChildren ? (dataUrl ?? null) : null);
 
     return (
         <div className="layer-preview-thumbnail" style={{ flexShrink: 0 }}>
-            {bitmap ? (
-                <canvas
-                    ref={canvasRef}
-                    width={THUMB_SIZE}
-                    height={THUMB_SIZE}
-                    style={{ display: 'block', width: THUMB_SIZE, height: THUMB_SIZE }}
-                />
+            {src ? (
+                <img src={src} alt="" className="layer-thumbnail-img" />
             ) : hasChildren ? (
                 <FolderIcon size={16} className="text-muted" fill="currentColor" fillOpacity={0.1} />
             ) : (
@@ -217,7 +287,12 @@ const LayerRow = memo(({
                     </span>
                 )}
 
-                <LayerThumbnailCell bitmap={layer._bitmap} hasChildren={hasChildren} />
+                {/* 修正: bitmap と dataUrl 両方を渡す */}
+                <LayerThumbnailCell
+                    bitmap={layer._bitmap}
+                    dataUrl={layer._dataUrl}
+                    hasChildren={hasChildren}
+                />
 
                 <input
                     type="text"
