@@ -1,8 +1,9 @@
 import { PsdLayerNode, SearchResult, PsdRoot } from '../types';
 
+// 旧workerに合わせた型: bitmap は必ず ImageBitmap（null なし）
 export interface LayerThumbEntry {
     key: string;
-    bitmap: ImageBitmap | null;
+    bitmap: ImageBitmap;
     left: number;
     top: number;
 }
@@ -18,20 +19,11 @@ export function getLayersAtPath(children: PsdLayerNode[], parentPath: number[]):
 
 /**
  * Worker から返ってきた LayerThumbEntry[] を PSD ツリーに注入する。
- *
- * - bitmap が null のエントリは _bitmap をセットしない (undefined のまま)
- *   → drawCanvas / LayerThumbnail で「サムネなし」として正しく扱われる
- * - グループレイヤーは map に存在しないため { ...layer } のままになる
- * - children を持つレイヤーは再帰的に処理する
  */
 export function attachThumbs(psd: PsdRoot, entries: LayerThumbEntry[]): PsdRoot {
-    // bitmap が存在するエントリのみ map に登録
-    // null エントリを map に入れると既存の _bitmap を null で上書きしてしまう
     const map = new Map<string, ImageBitmap>();
     for (const e of entries) {
-        if (e.bitmap != null) {
-            map.set(e.key, e.bitmap);
-        }
+        map.set(e.key, e.bitmap);
     }
 
     function walk(nodes: PsdLayerNode[], parentPath: number[]): PsdLayerNode[] {
@@ -39,12 +31,10 @@ export function attachThumbs(psd: PsdRoot, entries: LayerThumbEntry[]): PsdRoot 
             const key = [...parentPath, i].join('-');
             const bitmap = map.get(key);
 
-            // bitmap がある場合のみ _bitmap をセット、ない場合は既存を維持
             const next: PsdLayerNode = bitmap != null
                 ? { ...layer, _bitmap: bitmap }
                 : { ...layer };
 
-            // children は再帰処理
             if (Array.isArray(next.children)) {
                 next.children = walk(next.children, [...parentPath, i]);
             }
@@ -126,9 +116,6 @@ export function throttle<T extends (...args: any[]) => void>(
     }) as T;
 }
 
-/**
- * PSDツリー内にある全ての ImageBitmap を収集する。
- */
 export function collectBitmaps(psd: PsdRoot | null): Set<ImageBitmap> {
     const bitmaps = new Set<ImageBitmap>();
     if (!psd) return bitmaps;
@@ -143,9 +130,6 @@ export function collectBitmaps(psd: PsdRoot | null): Set<ImageBitmap> {
     return bitmaps;
 }
 
-/**
- * 指定したビットマップ集合を全て close() する。
- */
 export function closeBitmaps(bitmaps: Iterable<ImageBitmap>) {
     for (const b of bitmaps) {
         try {

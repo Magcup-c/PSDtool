@@ -1,220 +1,154 @@
-import { readPsd, initializeCanvas } from 'ag-psd';
+/**
+ * src/workers/psdWorker.ts
+ */
+
+import { readPsd, initializeCanvas, Psd } from 'ag-psd';
+import { PsdLayerNode } from '../types';
 
 initializeCanvas(
-  (width: number, height: number) => new OffscreenCanvas(Math.max(1, width), Math.max(1, height)) as any,
-  (width: number, height: number) => new ImageData(Math.max(1, width), Math.max(1, height)),
+    (width: number, height: number) => new OffscreenCanvas(width, height) as any,
 );
 
 export interface WorkerRequest {
-  id: number;
-  buffer: ArrayBuffer;
+    id: number;
+    buffer: ArrayBuffer;
 }
 
 export interface LayerThumbEntry {
-  key: string;
-  bitmap: ImageBitmap | null;
-  left: number;
-  top: number;
+    key: string;
+    bitmap: ImageBitmap;
+    left: number;
+    top: number;
 }
 
 export interface WorkerResponse {
-  id: number;
-  psd: any;
-  layers: LayerThumbEntry[];
-  hasPending?: boolean;
-  error?: string;
+    id: number;
+    psd: Psd;
+    layers: LayerThumbEntry[];
+    error?: string;
 }
 
-export interface WorkerDeferredResponse {
-  kind: 'deferred';
-  id: number;
-  layers: LayerThumbEntry[];
-  done: boolean;
+function normalizeRadioGroups(layers: PsdLayerNode[]): PsdLayerNode[] {
+    const processed = layers.map((layer) =>
+        layer.children && layer.children.length > 0
+            ? { ...layer, children: normalizeRadioGroups(layer.children) }
+            : layer,
+    );
+    const radioIndices = processed
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => (l.name || '').startsWith('*'))
+        .map(({ i }) => i);
+    if (radioIndices.length < 2) return processed;
+    const visibleIdx =
+        radioIndices.find((i) => !processed[i].hidden) ?? radioIndices[0];
+    const normalized = [...processed];
+    radioIndices.forEach((i) => {
+        normalized[i] = { ...normalized[i], hidden: i !== visibleIdx };
+    });
+    return normalized;
 }
 
-// ── 定数 ──────────────────────────────────────────────────────────────────────
-
-/**
- * この面積（px²）以下は即時・直列デコード。
- * それを超えるレイヤーは小さいものを先に送った後、直列で逐次送信する。
- */
-const IMMEDIATE_THRESHOLD_PX = 512 * 512;
-
-// ── ユーティリティ ────────────────────────────────────────────────────────────
-
-const yieldControl = (): Promise<void> => new Promise(r => setTimeout(r, 0));
-
-function removeCanvasDeep(obj: any): any {
-  if (obj === null || obj === undefined) return obj;
-  if (typeof obj !== 'object') return obj;
-  if (obj instanceof OffscreenCanvas) return undefined;
-  if (obj instanceof ImageData) return undefined;
-  if (obj instanceof ArrayBuffer) return obj;
-  if (ArrayBuffer.isView(obj)) return undefined;
-  if (Array.isArray(obj)) return obj.map(removeCanvasDeep);
-  const out: Record<string, any> = {};
-  for (const k of Object.keys(obj)) {
-    const v = obj[k];
-    if (v instanceof OffscreenCanvas || v instanceof ImageData || ArrayBuffer.isView(v)) continue;
-    out[k] = removeCanvasDeep(v);
-  }
-  return out;
-}
-
-/**
- * OffscreenCanvas → ImageBitmap。
- * transferToImageBitmap が使えればゼロコピー。失敗時は null。
- */
-async function canvasToBitmap(canvas: OffscreenCanvas): Promise<ImageBitmap | null> {
-  if (canvas.width <= 0 || canvas.height <= 0) return null;
-  try {
-    if (typeof canvas.transferToImageBitmap === 'function') {
-      return canvas.transferToImageBitmap();
+function stripCanvas(layers: PsdLayerNode[]): void {
+    for (const layer of layers) {
+        if ('canvas' in layer) delete layer.canvas;
+        if (layer.children?.length) stripCanvas(layer.children);
     }
-    return await createImageBitmap(canvas);
-  } catch (err) {
-    console.warn('[psdWorker] canvasToBitmap failed:', err);
-    return null;
-  }
 }
 
-// ── ツリー走査 ────────────────────────────────────────────────────────────────
+function stripOffscreenCanvasDeep(target: any, seen = new Set<any>()): void {
+    if (!target || typeof target !== 'object') return;
+    if (seen.has(target)) return;
+    seen.add(target);
 
-interface RawEntry {
-  key: string;
-  canvas: OffscreenCanvas;
-  left: number;
-  top: number;
-  px: number;
-}
-
-interface Collected {
-  immediate: RawEntry[];   // ≤ IMMEDIATE_THRESHOLD_PX
-  large: RawEntry[];       // > IMMEDIATE_THRESHOLD_PX（面積降順で後送）
-  nullEntries: LayerThumbEntry[];
-}
-
-/**
- * レイヤーツリーを再帰走査してキャンバス参照を収集する（I/O なし・同期）。
- *
- * キー生成: [...parentPath, i].join('-')
- * attachThumbs の walk と完全一致。グループ自身はスキップ。
- */
-function collectRaw(layers: any[], parentPath: number[], out: Collected): void {
-  for (let i = 0; i < layers.length; i++) {
-    const layer = layers[i];
-    const key  = [...parentPath, i].join('-');
-    const left = typeof layer.left === 'number' ? layer.left : 0;
-    const top  = typeof layer.top  === 'number' ? layer.top  : 0;
-
-    if (layer.children && layer.children.length > 0) {
-      collectRaw(layer.children, [...parentPath, i], out);
-      continue;
+    if (Array.isArray(target)) {
+        for (const item of target) stripOffscreenCanvasDeep(item, seen);
+        return;
     }
 
-    const canvas = layer.canvas;
-    if (canvas instanceof OffscreenCanvas && canvas.width > 0 && canvas.height > 0) {
-      const px = canvas.width * canvas.height;
-      if (px <= IMMEDIATE_THRESHOLD_PX) {
-        out.immediate.push({ key, canvas, left, top, px });
-      } else {
-        out.large.push({ key, canvas, left, top, px });
-      }
-    } else {
-      // テキスト・調整・空レイヤー等 → bitmap なし
-      out.nullEntries.push({ key, bitmap: null, left, top });
+    for (const key of Object.keys(target)) {
+        const value = (target as any)[key];
+        if (typeof OffscreenCanvas !== 'undefined' && value instanceof OffscreenCanvas) {
+            delete (target as any)[key];
+            continue;
+        }
+        stripOffscreenCanvasDeep(value, seen);
     }
-  }
 }
 
-// ── デコード（直列） ──────────────────────────────────────────────────────────
-
-/**
- * エントリを 1 件ずつ直列でデコードする。
- * Promise.all による一斉実行は行わない。
- * GPU リソース競合によるサイレント失敗を防ぐため直列化が最重要。
- */
-async function decodeSerial(entries: RawEntry[]): Promise<LayerThumbEntry[]> {
-  const results: LayerThumbEntry[] = [];
-  for (const e of entries) {
-    const bitmap = await canvasToBitmap(e.canvas);
-    results.push({ key: e.key, bitmap, left: e.left, top: e.top });
-  }
-  return results;
+async function canvasToBitmaps(
+    canvas: OffscreenCanvas,
+): Promise<{ bitmap: ImageBitmap }> {
+    const bitmap = await createImageBitmap(canvas);
+    return { bitmap };
 }
 
-// ── メッセージハンドラ ────────────────────────────────────────────────────────
+async function collectLayerBitmaps(
+    layers: PsdLayerNode[],
+    parentPath: number[] = [],
+): Promise<LayerThumbEntry[]> {
+    const directTasks: Promise<LayerThumbEntry | null>[] = [];
+    const childTasks: Promise<LayerThumbEntry[]>[] = [];
 
-self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
-  const { id, buffer } = event.data;
-
-  if (!buffer || buffer.byteLength === 0) {
-    (self as any).postMessage({ id, psd: {}, layers: [], error: 'Empty buffer' });
-    return;
-  }
-
-  try {
-    // 1. PSD パース
-    const psd = readPsd(new Uint8Array(buffer), {
-      skipLayerImageData: false,
-      skipCompositeImageData: true,
+    layers.forEach((layer, i) => {
+        const key = [...parentPath, i].join('-');
+        if (layer.canvas && !layer.children?.length) {
+            const canvas = layer.canvas as OffscreenCanvas;
+            const left = layer.left ?? 0;
+            const top  = layer.top  ?? 0;
+            directTasks.push(
+                canvasToBitmaps(canvas)
+                    .then(({ bitmap }) => ({ key, bitmap, left, top }))
+                    .catch(() => null),
+            );
+        }
+        if (layer.children?.length) {
+            childTasks.push(collectLayerBitmaps(layer.children, [...parentPath, i]));
+        }
     });
 
-    // 2. ツリー走査（同期）
-    const collected: Collected = { immediate: [], large: [], nullEntries: [] };
-    if (psd.children) collectRaw(psd.children, [], collected);
+    const [directs, children] = await Promise.all([
+        Promise.all(directTasks),
+        Promise.all(childTasks),
+    ]);
 
-    // 3. 小さいレイヤーを直列デコード
-    const immediateDecoded = await decodeSerial(collected.immediate);
-
-    // null エントリと合わせて初回レスポンス
-    const allImmediate: LayerThumbEntry[] = [
-      ...immediateDecoded,
-      ...collected.nullEntries,
+    return [
+        ...directs.filter((e): e is LayerThumbEntry => e !== null),
+        ...children.flat(),
     ];
+}
 
-    const safePsd    = removeCanvasDeep(psd);
-    const hasPending = collected.large.length > 0;
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+    const { id, buffer } = event.data;
 
-    const immediateBitmaps = allImmediate
-      .filter(e => e.bitmap != null)
-      .map(e => e.bitmap as ImageBitmap);
+    try {
+        const psd = readPsd(new Uint8Array(buffer), {
+            skipLayerImageData: false,
+            skipCompositeImageData: false,
+        });
 
-    (self as any).postMessage(
-      { id, psd: safePsd, layers: allImmediate, hasPending },
-      immediateBitmaps,
-    );
+        if (psd.children) {
+            psd.children = normalizeRadioGroups(psd.children);
+        }
 
-    if (!hasPending) return;
+        // canvas が生きている間に bitmap 生成（stripCanvas より前）
+        const layers = psd.children ? await collectLayerBitmaps(psd.children) : [];
 
-    // 4. 大きいレイヤーを面積降順（大→小）で 1 件ずつ直列デコードして送信
-    //    1 件ごとに送信することで、メインスレッドが受け取り次第描画できる。
-    //    バッチにまとめると GPU 競合が再発するため 1 件単位とする。
-    const largeSorted = [...collected.large].sort((a, b) => b.px - a.px);
+        // OffscreenCanvas を除去してから postMessage
+        if (psd.children) stripCanvas(psd.children);
+        if ('canvas' in (psd as any)) delete (psd as any).canvas;
+        stripOffscreenCanvasDeep(psd);
 
-    for (let i = 0; i < largeSorted.length; i++) {
-      const e    = largeSorted[i];
-      const done = i === largeSorted.length - 1;
+        const transferables: Transferable[] = layers.map((e) => e.bitmap);
 
-      // デコード前に yield してブラウザに制御を返す
-      await yieldControl();
-
-      const bitmap = await canvasToBitmap(e.canvas);
-
-      // デコード後も yield
-      await yieldControl();
-
-      const entry: LayerThumbEntry = { key: e.key, bitmap, left: e.left, top: e.top };
-      const bitmaps = bitmap != null ? [bitmap] : [];
-
-      (self as any).postMessage(
-        { kind: 'deferred', id, layers: [entry], done },
-        bitmaps,
-      );
+        const response: WorkerResponse = { id, psd, layers };
+        (self as any).postMessage(response, transferables);
+    } catch (err) {
+        const response: WorkerResponse = {
+            id,
+            psd: {} as Psd,
+            layers: [],
+            error: err instanceof Error ? err.message : String(err),
+        };
+        (self as any).postMessage(response);
     }
-
-  } catch (err) {
-    console.error('[psdWorker] fatal error:', err);
-    (self as any).postMessage({ id, psd: {}, layers: [], error: String(err) });
-  }
 };

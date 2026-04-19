@@ -1,13 +1,5 @@
 /**
  * src/hooks/usePsdLoader.ts
- *
- * 修正点:
- *   - handleDeferred で tabsRef.current を参照していたため、
- *     React の非同期 setState により複数 deferred batch が来た時に
- *     古い psd を参照してしまい、前の batch 結果が上書き消去される
- *     race condition を修正。
- *   - latestPsdByTabRef (Map<tabId, PsdRoot>) を導入し、
- *     React state の更新を待たずに常に最新 psd を参照できるようにした。
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -16,17 +8,12 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { attachThumbs } from '../utils/psdUtils';
-import type { LayerThumbEntry } from '../workers/psdWorker';
 import { PsdRoot } from '../types';
 import { Translations } from '../constants/translations';
 
 interface UsePsdLoaderProps {
     tabManager: any;
-    loadPsd: (
-        buffer: ArrayBuffer,
-        filePath?: string,
-        onDeferred?: (entries: LayerThumbEntry[], done: boolean) => void,
-    ) => Promise<any>;
+    loadPsd: (buffer: ArrayBuffer) => Promise<any>;
     addRecentFile: (path: string) => void;
     showToast: (message: string, type?: 'success' | 'error') => void;
     L: Translations;
@@ -51,16 +38,9 @@ export const usePsdLoader = ({
     activeIdRef,
     tabsRef,
 }: UsePsdLoaderProps) => {
-    const loadGenByTabRef     = useRef<Map<string, number>>(new Map());
-    const loadCountRef        = useRef(0);
-    const isFirstLoadRef      = useRef(true);
-
-    // ★ 修正の核心: タブごとの「最新 psd」を React state とは独立して追跡する
-    // React の setState は非同期なので、連続する deferred batch が来た時に
-    // tabsRef.current がまだ古い psd を持っている。
-    // このマップは updateTab/handleDeferred のたびに同期的に更新するため
-    // 常に最新の psd を参照できる。
-    const latestPsdByTabRef = useRef<Map<string, PsdRoot>>(new Map());
+    const loadGenByTabRef = useRef<Map<string, number>>(new Map());
+    const loadCountRef    = useRef(0);
+    const isFirstLoadRef  = useRef(true);
 
     const loadPsdFromFilePath = useCallback(async (filePath: string, tabId?: string) => {
         if (tabManager.activateExistingTab(filePath)) return;
@@ -78,14 +58,7 @@ export const usePsdLoader = ({
         setIsLoading(true);
         isFirstLoadRef.current = true;
 
-        // このタブの読み込みがまだ有効か確認
-        const tabStillTargeted = () =>
-            loadGenByTabRef.current.get(targetId) === g;
-
-        // タブ切り替え等でこのタブの読み込みが無効になったら latestPsd も削除
-        const cleanup = () => {
-            latestPsdByTabRef.current.delete(targetId);
-        };
+        const tabStillTargeted = () => loadGenByTabRef.current.get(targetId) === g;
 
         try {
             let data: { buffer: ArrayBuffer };
@@ -97,39 +70,15 @@ export const usePsdLoader = ({
                 );
             }
 
-            if (!tabStillTargeted()) { cleanup(); return; }
+            if (!tabStillTargeted()) return;
 
             if (!data.buffer || data.buffer.byteLength === 0) {
                 throw new Error(`File "${filePath}" is empty`);
             }
 
-            // ── deferred bitmap 受信ハンドラ ────────────────────────────────
-            // ★ tabsRef ではなく latestPsdByTabRef から最新 psd を取得することで
-            //    React の非同期 setState に依存しない。
-            //    batch1 完了 → latestPsdByTabRef 更新 → batch2 完了時には batch1 反映済み psd を参照
-            const handleDeferred = (entries: LayerThumbEntry[], _done: boolean) => {
-                if (!tabStillTargeted()) return;
+            const result = await loadPsd(data.buffer);
 
-                const basePsd = latestPsdByTabRef.current.get(targetId);
-                if (!basePsd) return;
-
-                const validEntries = entries.filter((e) => e.bitmap !== null) as any[];
-                const merged = attachThumbs(basePsd, validEntries);
-
-                // React state の更新を待たずに即座に最新 psd を記録
-                latestPsdByTabRef.current.set(targetId, merged);
-
-                tabManager.updateTab(targetId, { psd: merged });
-
-                // アクティブタブなら history も更新
-                if (activeIdRef.current === targetId) {
-                    resetHistory(merged);
-                }
-            };
-
-            const result = await loadPsd(data.buffer, filePath, handleDeferred);
-
-            if (!tabStillTargeted()) { cleanup(); return; }
+            if (!tabStillTargeted()) return;
             if (!result?.psd) {
                 throw new Error('Worker returned an invalid PSD result');
             }
@@ -139,12 +88,7 @@ export const usePsdLoader = ({
                 ? attachThumbs(rawPsd, result.layers)
                 : rawPsd;
 
-            if (!tabStillTargeted()) { cleanup(); return; }
-
-            // ★ updateTab より先に latestPsdByTabRef を更新しておく
-            //    こうすることで、この直後に来る deferred batch が
-            //    nextPsd を確実に参照できる
-            latestPsdByTabRef.current.set(targetId, nextPsd);
+            if (!tabStillTargeted()) return;
 
             if (activeIdRef.current === targetId) resetHistory(nextPsd);
 
@@ -164,7 +108,6 @@ export const usePsdLoader = ({
                 showToast(`${L.loadFailed}: ${msg}`, 'error');
                 tabManager.updateTab(targetId, { isLoading: false });
             }
-            cleanup();
         } finally {
             if (loadGenByTabRef.current.get(targetId) === g) {
                 loadGenByTabRef.current.delete(targetId);
@@ -192,9 +135,7 @@ export const usePsdLoader = ({
         const checkArgs = async () => {
             try {
                 const args: string[] = await invoke('get_launch_args');
-                const psdFile = args.slice(1).find((x) =>
-                    x.toLowerCase().endsWith('.psd')
-                );
+                const psdFile = args.slice(1).find((x) => x.toLowerCase().endsWith('.psd'));
                 if (psdFile) openPsdUnified(psdFile);
             } catch (e) {
                 console.error('Failed to get launch args:', e);
@@ -206,9 +147,7 @@ export const usePsdLoader = ({
     // シングルインスタンス: 別プロセスからファイルを受信
     useEffect(() => {
         const p = listen<string[]>('open-file', (event) => {
-            const psdFile = event.payload.slice(1).find((x) =>
-                x.toLowerCase().endsWith('.psd')
-            );
+            const psdFile = event.payload.slice(1).find((x) => x.toLowerCase().endsWith('.psd'));
             if (psdFile) openPsdUnified(psdFile);
             getCurrentWindow().setFocus();
         });

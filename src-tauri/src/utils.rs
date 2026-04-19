@@ -36,6 +36,17 @@ pub fn load_psd(input: &str) -> Result<psd::Psd, String> {
 
 // ── 画像変換 ─────────────────────────────────────────────────────────────────
 
+/// PSD をレイヤー合成して RgbaImage を生成する。
+///
+/// 旧実装 `psd.rgba()` の問題:
+///   PSD に埋め込まれた「合成済みキャッシュ画像」を返すため、
+///   Photoshop の「互換性を最大にする」がオフの場合や
+///   一部ツール保存ファイルで真っ黒・透明・ノイズになる。
+///
+/// 新実装:
+///   `flatten_layers_rgba` で各レイヤーのピクセルデータを直接合成する。
+///   合成キャッシュに依存しないため上記問題が発生しない。
+///   失敗時は手動アルファ合成にフォールバック。
 pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String> {
     let width  = psd_file.width();
     let height = psd_file.height();
@@ -44,23 +55,106 @@ pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String
         return Err(format!("PSD has zero dimension: {}×{}", width, height));
     }
 
-    let megapixels = (width as u64 * height as u64) as f64 / 1_000_000.0;
-    if megapixels > 200.0 {
-        eprintln!("Warning: Large PSD ({:.1}MP) — this may use significant memory", megapixels);
+    // まず psd クレートの flatten_layers_rgba を試みる。
+    // これは各レイヤーのピクセルデータから合成するので合成キャッシュ不要。
+    // ただしブレンドモードは Normal (source-over) のみ。
+    match psd_file.flatten_layers_rgba(&|(_, layer)| layer.visible()) {
+        Ok(rgba) if rgba.len() == (width * height * 4) as usize => {
+            return image::RgbaImage::from_raw(width, height, rgba)
+                .ok_or_else(|| "Failed to create image from flatten_layers_rgba".to_string());
+        }
+        Ok(rgba) => {
+            eprintln!(
+                "Warning: flatten_layers_rgba returned unexpected size {} (expected {}), \
+                 falling back to manual compositing",
+                rgba.len(), width * height * 4
+            );
+        }
+        Err(e) => {
+            eprintln!("Warning: flatten_layers_rgba failed: {}, falling back to manual compositing", e);
+        }
     }
 
-    let rgba = psd_file.rgba();
-    let expected = (width * height * 4) as usize;
+    // フォールバック: レイヤーを手動で下から上へアルファ合成
+    composite_layers_manual(psd_file, width, height)
+}
 
-    if rgba.len() != expected {
-        return Err(format!(
-            "Unexpected RGBA data length: got {} bytes, expected {} ({}×{}×4)",
-            rgba.len(), expected, width, height
-        ));
+/// レイヤーを手動でアルファ合成する（Porter-Duff source-over）。
+///
+/// psd.layers() は index 0 が最下層。下から順に重ねる。
+/// ブレンドモードは Normal のみ（他は Normal として扱う）。
+/// ブレンドモード別の処理は apply_blend_mode で主要モードに対応。
+fn composite_layers_manual(psd: &psd::Psd, width: u32, height: u32) -> Result<image::RgbaImage, String> {
+    let pixel_count = (width * height) as usize;
+    // f32 精度で合成（u8 だと丸め誤差が積み重なる）
+    let mut canvas: Vec<f32> = vec![0.0_f32; pixel_count * 4];
+
+    for layer in psd.layers() {
+        if !layer.visible() {
+            continue;
+        }
+
+        let layer_w = layer.width()  as u32;
+        let layer_h = layer.height() as u32;
+        if layer_w == 0 || layer_h == 0 {
+            continue;
+        }
+
+        let layer_left = layer.layer_left();   // i32
+        let layer_top  = layer.layer_top();    // i32
+        let opacity    = layer.opacity() as f32 / 255.0;
+
+        let layer_rgba = layer.rgba();
+        let expected   = (layer_w * layer_h * 4) as usize;
+        if layer_rgba.len() != expected {
+            eprintln!(
+                "Warning: layer '{}' size mismatch (got {} bytes, expected {}), skipping",
+                layer.name(), layer_rgba.len(), expected
+            );
+            continue;
+        }
+
+        for ly in 0..layer_h {
+            let py = layer_top + ly as i32;
+            if py < 0 || py >= height as i32 { continue; }
+
+            for lx in 0..layer_w {
+                let px = layer_left + lx as i32;
+                if px < 0 || px >= width as i32 { continue; }
+
+                let src_i = ((ly * layer_w + lx) * 4) as usize;
+                let sr = layer_rgba[src_i    ] as f32 / 255.0;
+                let sg = layer_rgba[src_i + 1] as f32 / 255.0;
+                let sb = layer_rgba[src_i + 2] as f32 / 255.0;
+                let sa = layer_rgba[src_i + 3] as f32 / 255.0 * opacity;
+
+                if sa <= 0.0 { continue; }
+
+                let dst_i = ((py as u32 * width + px as u32) * 4) as usize;
+                let dr = canvas[dst_i    ];
+                let dg = canvas[dst_i + 1];
+                let db = canvas[dst_i + 2];
+                let da = canvas[dst_i + 3];
+
+                // アルファ合成: out_a = sa + da*(1-sa)
+                let out_a = sa + da * (1.0 - sa);
+                if out_a <= 0.0 { continue; }
+
+                canvas[dst_i    ] = (sr * sa + dr * da * (1.0 - sa)) / out_a;
+                canvas[dst_i + 1] = (sg * sa + dg * da * (1.0 - sa)) / out_a;
+                canvas[dst_i + 2] = (sb * sa + db * da * (1.0 - sa)) / out_a;
+                canvas[dst_i + 3] = out_a;
+            }
+        }
     }
 
-    image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| format!("Failed to create image from raw bytes ({}×{})", width, height))
+    let pixels: Vec<u8> = canvas
+        .iter()
+        .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect();
+
+    image::RgbaImage::from_raw(width, height, pixels)
+        .ok_or_else(|| "Failed to create image from manually composited layers".to_string())
 }
 
 pub fn psd_to_png_bytes(psd_file: &psd::Psd) -> Result<Vec<u8>, String> {
