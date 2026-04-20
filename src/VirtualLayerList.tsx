@@ -8,7 +8,7 @@
  *   - deferred bitmap が後から届いた際も objectUrl が更新されサムネが表示される
  */
 import React, {
-    memo, useMemo, useCallback, useRef, useEffect, useState, forwardRef,
+    memo, useMemo, useCallback, useEffect, useState, forwardRef,
 } from 'react';
 import {
     ChevronDown, ChevronRight, Eye, EyeOff,
