@@ -87,6 +87,8 @@ export const useTabSync = ({
         setSearchQuery('');
         setZoomInputActive(false);
 
+        // isFirstLoadRef を true にしてから zoom をセット
+        // → useEditorLifecycle の centering effect が次の psd 変化で発火する
         isFirstLoadRef.current = true;
         setZoomTo(nextTab.zoom);
 

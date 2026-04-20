@@ -106,7 +106,8 @@ export const usePsdLoader = ({
             if (tabStillTargeted()) {
                 const msg = err instanceof Error ? err.message : String(err);
                 showToast(`${L.loadFailed}: ${msg}`, 'error');
-                tabManager.updateTab(targetId, { isLoading: false });
+                // 失敗したタブを閉じる（空タブが残らないように）
+                tabManager.closeTab(targetId);
             }
         } finally {
             if (loadGenByTabRef.current.get(targetId) === g) {

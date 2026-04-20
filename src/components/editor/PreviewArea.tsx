@@ -14,7 +14,7 @@ interface PreviewAreaProps {
 }
 
 export const PreviewArea: React.FC<PreviewAreaProps> = ({
-    activeTabId, psd, isLoading, scrollRef, canvasContainerRef, canvasRef, SCROLL_AREA, L
+    psd, isLoading, scrollRef, canvasContainerRef, canvasRef, SCROLL_AREA, L
 }) => {
     return (
         <div 
@@ -33,8 +33,7 @@ export const PreviewArea: React.FC<PreviewAreaProps> = ({
                 </div>
             ) : psd ? (
                 <div
-                    key={activeTabId}
-                    className="preview-scroll-inner preview-tab-fade-in"
+                    className="preview-scroll-inner"
                     style={{ width: SCROLL_AREA, height: SCROLL_AREA, position: 'relative' }}
                 >
                     <div
