@@ -38,23 +38,18 @@ pub fn load_psd(input: &str) -> Result<psd::Psd, String> {
 
 /// PSD を合成して RgbaImage を生成する。
 ///
-/// psd クレートの flatten_layers_rgba() を使い、可視レイヤーを
-/// Porter-Duff source-over で合成する。
+/// 【設計】
+/// psd クレートの flatten_layers_rgba() は内部で全レイヤーの rgba() をキャッシュするため、
+/// 「レイヤー数 × PSD全体サイズ × 4 バイト」のメモリを消費する。
+/// 3000×3000 PSD × 20レイヤーなら約 720MB になり、OOM でクラッシュする。
 ///
-/// 【旧実装の問題（修正済み）】
+/// そのため自前で1レイヤーずつ Porter-Duff source-over 合成を行う。
+/// 同時に保持するメモリは「出力バッファ + 1レイヤー分」= 2 × PSD全体サイズ × 4 バイトのみ。
 ///
-/// 1. layer.rgba() のサイズ誤解:
-///    layer.rgba() は psd_width * psd_height * 4 バイトを返す（PSD全体サイズ）。
-///    ピクセルはすでにキャンバス座標系に配置済み。
-///    旧コードは layer.width() * layer.height() * 4 を期待していたため、
-///    PSD全体を覆わない全レイヤーがサイズ不一致でスキップされ、真っ白/真っ黒になっていた。
-///
-/// 2. 二重オフセット:
-///    layer.rgba() はすでに layer_left/layer_top を適用済みなのに、
-///    旧コードがさらにオフセットを足していた。
-///
-/// 3. psd.rgba() の誤用:
-///    psd.rgba() は「互換性のために最大化」オプション未使用のPSDでは空になる。
+/// 【layer.rgba() の正しい動作】
+/// layer.rgba() は psd_width × psd_height × 4 バイトを返す（PSD全体キャンバスサイズ）。
+/// ピクセルはすでに layer_left/layer_top のオフセットで配置済み。
+/// psd.layers() のインデックス 0 が最下層。
 pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String> {
     let width  = psd_file.width();
     let height = psd_file.height();
@@ -63,20 +58,82 @@ pub fn psd_to_rgba_image(psd_file: &psd::Psd) -> Result<image::RgbaImage, String
         return Err(format!("PSD has zero dimension: {}×{}", width, height));
     }
 
-    let pixels = psd_file
-        .flatten_layers_rgba(&|(_idx, layer)| layer.visible())
-        .map_err(|e| format!("Failed to flatten PSD layers: {}", e))?;
+    let pixel_count = (width * height) as usize;
+    // 出力バッファ: 完全透明で初期化
+    let mut canvas = vec![0u8; pixel_count * 4];
 
-    let expected = (width * height * 4) as usize;
-    if pixels.len() != expected {
-        return Err(format!(
-            "flatten_layers_rgba returned unexpected size: got {} bytes, expected {} ({}×{}×4)",
-            pixels.len(), expected, width, height
-        ));
+    let layers = psd_file.layers();
+
+    if layers.is_empty() {
+        // レイヤーなし → psd.rgba()（埋め込み合成済み画像）を試みる
+        let raw = psd_file.rgba();
+        if raw.len() == pixel_count * 4 {
+            return image::RgbaImage::from_raw(width, height, raw)
+                .ok_or_else(|| "Failed to create image from psd.rgba()".to_string());
+        }
+        // 埋め込みも無効なら透明画像を返す
+        return image::RgbaImage::from_raw(width, height, canvas)
+            .ok_or_else(|| "Failed to create blank image".to_string());
     }
 
-    image::RgbaImage::from_raw(width, height, pixels)
-        .ok_or_else(|| "Failed to create RgbaImage from flattened pixels".to_string())
+    // index 0 = 最下層 → そのまま順番に source-over で重ねる
+    for layer in layers.iter() {
+        if !layer.visible() {
+            continue;
+        }
+        if layer.opacity() == 0 {
+            continue;
+        }
+
+        // layer.rgba() は psd_width × psd_height × 4 バイト
+        // ピクセルはすでにキャンバス座標系に配置済み
+        let layer_rgba = layer.rgba();
+
+        if layer_rgba.len() != pixel_count * 4 {
+            // サイズが合わない場合はスキップ（壊れたレイヤー）
+            eprintln!(
+                "Warning: layer '{}' rgba() size mismatch: {} vs {}, skipping",
+                layer.name(), layer_rgba.len(), pixel_count * 4
+            );
+            continue;
+        }
+
+        let opacity = layer.opacity() as f32 / 255.0;
+
+        // Porter-Duff source-over: 1ピクセルずつ合成
+        // canvas = src over dst
+        for i in 0..pixel_count {
+            let base = i * 4;
+
+            let sr = layer_rgba[base    ] as f32 / 255.0;
+            let sg = layer_rgba[base + 1] as f32 / 255.0;
+            let sb = layer_rgba[base + 2] as f32 / 255.0;
+            let sa = layer_rgba[base + 3] as f32 / 255.0 * opacity;
+
+            if sa <= 0.0 {
+                continue;
+            }
+
+            let dr = canvas[base    ] as f32 / 255.0;
+            let dg = canvas[base + 1] as f32 / 255.0;
+            let db = canvas[base + 2] as f32 / 255.0;
+            let da = canvas[base + 3] as f32 / 255.0;
+
+            // out_a = sa + da * (1 - sa)
+            let out_a = sa + da * (1.0 - sa);
+            if out_a <= 0.0 {
+                continue;
+            }
+
+            canvas[base    ] = ((sr * sa + dr * da * (1.0 - sa)) / out_a * 255.0).round() as u8;
+            canvas[base + 1] = ((sg * sa + dg * da * (1.0 - sa)) / out_a * 255.0).round() as u8;
+            canvas[base + 2] = ((sb * sa + db * da * (1.0 - sa)) / out_a * 255.0).round() as u8;
+            canvas[base + 3] = (out_a * 255.0).round() as u8;
+        }
+    }
+
+    image::RgbaImage::from_raw(width, height, canvas)
+        .ok_or_else(|| "Failed to create RgbaImage from composited pixels".to_string())
 }
 
 pub fn psd_to_png_bytes(psd_file: &psd::Psd) -> Result<Vec<u8>, String> {
