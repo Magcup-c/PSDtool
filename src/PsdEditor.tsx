@@ -2,7 +2,7 @@
  * src/PsdEditor.tsx
  */
 
-import { useMemo, useCallback, useRef, useState, startTransition } from 'react';
+import { useMemo, useCallback, useRef, useState } from 'react';
 import './PsdEditor.css';
 
 import { usePsdHistory } from './hooks/usePsdHistory';
@@ -116,8 +116,7 @@ const PsdEditor = () => {
         layerScrollRef, psdRef, commitPsd, () => tabManager.markDirty()
     );
 
-    // ★ canvasContainerRef・applyZoom・psd を追加で渡す
-    // ★ setZoomTo は削除（applyZoom に一本化）
+    // ★ canvasContainerRef・applyZoom・psd を渡す / setZoomTo は削除
     useTabSync({
         activeId, tabs, updateTab, scrollRef, canvasContainerRef, zoom, flipX, flipY, closedKeys,
         resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
@@ -140,11 +139,8 @@ const PsdEditor = () => {
         handleUndo, handleRedo, handleCopyCanvas, handleToggleFullscreen: ui.handleToggleFullscreen,
         handleOpenFile, setShowSettings: ui.setShowSettings, handleZoom, centerPsd,
         tabs, activeId, handleActivateTab: tabManager.setActiveId,
-        handleCloseTab: id => startTransition(() => tabManager.closeTab(id)),
-        handleNewTab: () => {
-            tabManager.openNewTab();
-            resetHistory(null); setCurrentFilePath(null); setFlipX(false); setFlipY(false); setClosedKeys(new Set());
-        }
+        handleCloseTab: id => handleCloseTab(id),
+        handleNewTab: () => handleNewTab(),
     });
 
     const exportButtonLabel = useMemo(() => {
@@ -164,17 +160,72 @@ const PsdEditor = () => {
         setClosedKeys(new Set());
     }, [tabManager, resetHistory, setFlipX, setFlipY, setClosedKeys]);
 
+    // ★ タブを閉じる処理を全面修正
     const handleCloseTab = useCallback((id: string) => {
-        if (tabs.length === 1) {
+        const currentTabs = tabsRef.current;
+
+        if (currentTabs.length === 1) {
+            // ── 最後の1枚: コンテンツをリセットして空タブにする ──────────────
             resetHistory(null);
             setCurrentFilePath(null);
-            setFlipX(false); setFlipY(false);
+            setFlipX(false);
+            setFlipY(false);
             setClosedKeys(new Set());
             setSearchQuery('');
             setZoomInputActive(false);
+            // zoom と scroll もリセット
+            applyZoom(1);
+            const el = scrollRef.current;
+            if (el) {
+                // スクロール中央に戻す（psd=null なので SCROLL_AREA/2 付近に）
+                el.scrollLeft = SCROLL_AREA / 2;
+                el.scrollTop  = SCROLL_AREA / 2;
+            }
+            tabManager.closeTab(id);
+            return;
         }
-        startTransition(() => { tabManager.closeTab(id); });
-    }, [tabManager, resetHistory, setFlipX, setFlipY, setClosedKeys, setSearchQuery, setZoomInputActive, tabs.length]);
+
+        // ── 複数タブ: 閉じた後にアクティブになるタブを先に計算して復元 ────────
+        // startTransition を使わず同期的に処理することで
+        // useTabSync の useLayoutEffect が確実に発火するようにする
+        const closedIdx = currentTabs.findIndex(t => t.id === id);
+        const nextTabs  = currentTabs.filter(t => t.id !== id);
+        const nextTab   = nextTabs[Math.min(closedIdx, nextTabs.length - 1)];
+
+        if (nextTab && activeId === id) {
+            // 閉じるタブがアクティブな場合: 次のタブの状態を即時復元
+            // (useTabSync の useLayoutEffect に任せると tabsRef の更新タイミングが
+            //  ずれる可能性があるため、ここで直接処理する)
+            resetHistory(nextTab.psd ?? null);
+            setCurrentFilePath(nextTab.filePath);
+            setFlipX(nextTab.flipX);
+            setFlipY(nextTab.flipY);
+            setClosedKeys(new Set(nextTab.closedKeys));
+            setSearchQuery('');
+            setZoomInputActive(false);
+            isFirstLoadRef.current = true;
+
+            // zoom と scroll は RAF で適用
+            const z = nextTab.zoom;
+            const sl = nextTab.scrollLeft;
+            const st = nextTab.scrollTop;
+            requestAnimationFrame(() => {
+                applyZoom(z);
+                const el = scrollRef.current;
+                if (el) {
+                    el.scrollLeft = sl;
+                    el.scrollTop  = st;
+                }
+            });
+        }
+
+        tabManager.closeTab(id);
+    }, [
+        tabsRef, activeId, tabManager, resetHistory,
+        setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
+        setSearchQuery, setZoomInputActive, applyZoom, scrollRef,
+        isFirstLoadRef, SCROLL_AREA,
+    ]);
 
     return (
         <div

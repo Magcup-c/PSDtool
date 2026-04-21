@@ -93,7 +93,7 @@ export function useZoomPan(
         if (changed) ignoreScrollUntilRef.current = performance.now() + 80;
     }, [psdRef]);
 
-    // ★ public に公開する applyZoom
+    // ★ 外部から直接 zoom の transform だけを適用する（scroll 位置は変えない）
     const applyZoom = useCallback((nextZoom: number) => {
         zoomRef.current = nextZoom;
         if (canvasContainerRef.current) {
