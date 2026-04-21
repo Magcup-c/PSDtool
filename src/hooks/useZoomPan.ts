@@ -29,7 +29,6 @@ export function useZoomPan(
     const nativeInputUntilRef   = useRef(0);
     const lastPointerRef        = useRef<{ x: number; y: number } | null>(null);
 
-    // ── cleanup: scrollClampTimer ─────────────────────────────────────────────
     useEffect(() => {
         return () => {
             if (scrollClampTimerRef.current) {
@@ -94,6 +93,7 @@ export function useZoomPan(
         if (changed) ignoreScrollUntilRef.current = performance.now() + 80;
     }, [psdRef]);
 
+    // ★ public に公開する applyZoom
     const applyZoom = useCallback((nextZoom: number) => {
         zoomRef.current = nextZoom;
         if (canvasContainerRef.current) {
@@ -221,7 +221,7 @@ export function useZoomPan(
         return () => { if (unlisten) unlisten(); };
     }, [scrollRef, zoomAround, clampScroll]);
 
-    // ── スクロールクランプ（クリーンアップ付き）──────────────────────────────
+    // ── スクロールクランプ ────────────────────────────────────────────────────
 
     useEffect(() => {
         const el = scrollRef.current;
@@ -247,7 +247,6 @@ export function useZoomPan(
         el.addEventListener('scroll', onScroll, { passive: true });
         return () => {
             el.removeEventListener('scroll', onScroll);
-            // ← ここで確実にクリア（修正箇所）
             if (scrollClampTimerRef.current) {
                 clearTimeout(scrollClampTimerRef.current);
                 scrollClampTimerRef.current = null;
@@ -338,5 +337,6 @@ export function useZoomPan(
         requestAnimationFrame(() => centerPsd());
     }, [scrollRef, psdRef, setZoomTo, centerPsd]);
 
-    return { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA };
+    // ★ applyZoom を外部に公開
+    return { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA, applyZoom };
 }

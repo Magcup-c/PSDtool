@@ -79,7 +79,8 @@ const PsdEditor = () => {
         drawRafRef, hasFlipSuffix
     } = useEditorCanvas(psd, psdRef);
 
-    const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA } =
+    // ★ applyZoom を取り出す
+    const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA, applyZoom } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
     const {
@@ -115,12 +116,14 @@ const PsdEditor = () => {
         layerScrollRef, psdRef, commitPsd, () => tabManager.markDirty()
     );
 
+    // ★ canvasContainerRef・applyZoom・psd を追加で渡す
+    // ★ setZoomTo は削除（applyZoom に一本化）
     useTabSync({
-        activeId, tabs, updateTab, scrollRef, zoom, flipX, flipY, closedKeys,
+        activeId, tabs, updateTab, scrollRef, canvasContainerRef, zoom, flipX, flipY, closedKeys,
         resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
-        setSearchQuery, setZoomInputActive, setZoomTo, isFirstLoadRef,
+        setSearchQuery, setZoomInputActive, applyZoom, isFirstLoadRef,
         layerDragCleanup, favoriteDragCleanupRef, setFavoriteDrop,
-        renameSessionRef, renameTimerRef
+        renameSessionRef, renameTimerRef, psd,
     });
 
     const { handleOpenFile, handleCopyCanvas, handleSaveFile } = useFileActions({
@@ -231,7 +234,7 @@ const PsdEditor = () => {
                     onExportFavoriteImage={handleExportFavoriteImage}
                     onExportAllFavoriteImages={handleExportAllFavoriteImages}
                     currentFilePath={currentFilePath}
-                    showToast={showToast} // ✅ 追加
+                    showToast={showToast}
                 />
 
                 <div className="sidebar-resizer" onMouseDown={ui.handleResizerMouseDown} />
