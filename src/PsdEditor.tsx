@@ -76,9 +76,10 @@ const PsdEditor = () => {
     const {
         canvasRef, flipX, setFlipX, flipY, setFlipY, radioEnabled, setRadioEnabled,
         lockedEnabled, setLockedEnabled, flipEnabled, setFlipEnabled,
-        drawRafRef, hasFlipSuffix
+        drawRafRef, hasFlipSuffix, drawCanvas,
     } = useEditorCanvas(psd, psdRef);
 
+    // ★ applyZoom を取り出す
     const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA, applyZoom } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
@@ -115,12 +116,13 @@ const PsdEditor = () => {
         layerScrollRef, psdRef, commitPsd, () => tabManager.markDirty()
     );
 
+    // ★ drawCanvas を渡して、タブ切り替え時に強制再描画できるようにする
     useTabSync({
         activeId, tabs, updateTab, scrollRef, canvasContainerRef, zoom, flipX, flipY, closedKeys,
         resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
         setSearchQuery, setZoomInputActive, applyZoom, isFirstLoadRef,
         layerDragCleanup, favoriteDragCleanupRef, setFavoriteDrop,
-        renameSessionRef, renameTimerRef, psd,
+        renameSessionRef, renameTimerRef, psd, drawCanvas,
     });
 
     const { handleOpenFile, handleCopyCanvas, handleSaveFile } = useFileActions({
@@ -158,11 +160,12 @@ const PsdEditor = () => {
         setClosedKeys(new Set());
     }, [tabManager, resetHistory, setFlipX, setFlipY, setClosedKeys]);
 
+    // ★ タブを閉じる処理
     const handleCloseTab = useCallback((id: string) => {
         const currentTabs = tabsRef.current;
 
         if (currentTabs.length === 1) {
-            // 最後の1枚: コンテンツをリセットして空タブにする
+            // ── 最後の1枚: コンテンツをリセットして空タブにする ──────────────
             resetHistory(null);
             setCurrentFilePath(null);
             setFlipX(false);
@@ -180,14 +183,12 @@ const PsdEditor = () => {
             return;
         }
 
-        // 複数タブ: 閉じた後にアクティブになるタブを先に計算して復元
+        // ── 複数タブ: 閉じた後にアクティブになるタブを先に計算して復元 ────────
         const closedIdx = currentTabs.findIndex(t => t.id === id);
         const nextTabs = currentTabs.filter(t => t.id !== id);
         const nextTab = nextTabs[Math.min(closedIdx, nextTabs.length - 1)];
 
         if (nextTab && activeId === id) {
-            // ★ resetHistory(nextTab.psd) → psd state 変化
-            //   → useEditorCanvas の useEffect が発火 → drawCanvas(psd) が自動で呼ばれる
             resetHistory(nextTab.psd ?? null);
             setCurrentFilePath(nextTab.filePath);
             setFlipX(nextTab.flipX);
@@ -200,12 +201,17 @@ const PsdEditor = () => {
             const z = nextTab.zoom;
             const sl = nextTab.scrollLeft;
             const st = nextTab.scrollTop;
+            const nextPsd = nextTab.psd ?? null;
             requestAnimationFrame(() => {
                 applyZoom(z);
                 const el = scrollRef.current;
                 if (el) {
                     el.scrollLeft = sl;
                     el.scrollTop = st;
+                }
+                // 強制再描画
+                if (nextPsd) {
+                    drawCanvas(nextPsd);
                 }
             });
         }
@@ -215,7 +221,7 @@ const PsdEditor = () => {
         tabsRef, activeId, tabManager, resetHistory,
         setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
         setSearchQuery, setZoomInputActive, applyZoom, scrollRef,
-        isFirstLoadRef, SCROLL_AREA,
+        isFirstLoadRef, SCROLL_AREA, drawCanvas,
     ]);
 
     return (
