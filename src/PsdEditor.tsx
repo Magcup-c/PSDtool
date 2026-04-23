@@ -115,6 +115,8 @@ const PsdEditor = () => {
         layerScrollRef, psdRef, commitPsd, () => tabManager.markDirty()
     );
 
+    // useTabSync はタブ切り替え（activeId 変化）の処理だけを担当する。
+    // handleCloseTab・handleNewTab とは重複させない。
     useTabSync({
         activeId, tabs, updateTab, scrollRef, canvasContainerRef, zoom, flipX, flipY, closedKeys,
         resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
@@ -152,16 +154,21 @@ const PsdEditor = () => {
 
     const handleNewTab = useCallback(() => {
         tabManager.openNewTab();
-        resetHistory(null);
-        setCurrentFilePath(null);
-        setFlipX(false); setFlipY(false);
-        setClosedKeys(new Set());
-    }, [tabManager, resetHistory, setFlipX, setFlipY, setClosedKeys]);
+        // useTabSync が activeId 変化を検知して状態を復元するので
+        // ここでは openNewTab だけ呼べばよい
+    }, [tabManager]);
 
+    // タブを閉じる。
+    // 重要：ここでは resetHistory などの state 操作を一切行わない。
+    // closeTab → activeId が変わる → useTabSync の useLayoutEffect が発火して
+    // すべての状態復元を行う、という一本化した流れにする。
     const handleCloseTab = useCallback((id: string) => {
         const currentTabs = tabsRef.current;
 
         if (currentTabs.length === 1) {
+            // 最後の1枚: 空タブにリセットして閉じる
+            // activeId は変わらないので useTabSync は発火しない。
+            // ここで直接リセットする。
             resetHistory(null);
             setCurrentFilePath(null);
             setFlipX(false);
@@ -173,50 +180,17 @@ const PsdEditor = () => {
             const el = scrollRef.current;
             if (el) {
                 el.scrollLeft = SCROLL_AREA / 2;
-                el.scrollTop = SCROLL_AREA / 2;
+                el.scrollTop  = SCROLL_AREA / 2;
             }
-            tabManager.closeTab(id);
-            return;
         }
 
-        const closedIdx = currentTabs.findIndex(t => t.id === id);
-        const nextTabs = currentTabs.filter(t => t.id !== id);
-        const nextTab = nextTabs[Math.min(closedIdx, nextTabs.length - 1)];
-
-        if (nextTab && activeId === id) {
-            resetHistory(nextTab.psd ?? null);
-            setCurrentFilePath(nextTab.filePath);
-            setFlipX(nextTab.flipX);
-            setFlipY(nextTab.flipY);
-            setClosedKeys(new Set(nextTab.closedKeys));
-            setSearchQuery('');
-            setZoomInputActive(false);
-            isFirstLoadRef.current = true;
-
-            const z = nextTab.zoom;
-            const sl = nextTab.scrollLeft;
-            const st = nextTab.scrollTop;
-            const nextPsd = nextTab.psd ?? null;
-
-            requestAnimationFrame(() => {
-                applyZoom(z);
-                const el = scrollRef.current;
-                if (el) {
-                    el.scrollLeft = sl;
-                    el.scrollTop = st;
-                }
-                if (nextPsd) {
-                    drawCanvas(nextPsd);
-                }
-            });
-        }
-
+        // activeId が変わるので useTabSync の useLayoutEffect が
+        // 次のアクティブタブの状態をすべて復元する
         tabManager.closeTab(id);
     }, [
-        tabsRef, activeId, tabManager, resetHistory,
+        tabsRef, tabManager, resetHistory,
         setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
-        setSearchQuery, setZoomInputActive, applyZoom, scrollRef,
-        isFirstLoadRef, SCROLL_AREA, drawCanvas,
+        setSearchQuery, setZoomInputActive, applyZoom, scrollRef, SCROLL_AREA,
     ]);
 
     return (

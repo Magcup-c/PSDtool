@@ -39,20 +39,16 @@ export const useTabSync = ({
 }: UseTabSyncProps) => {
     const prevActiveIdRef = useRef<string>(activeId);
     const outgoingUiRef = useRef({ zoom, flipX, flipY, closedKeys: Array.from(closedKeys) });
-
     const tabsRef = useRef(tabs);
     tabsRef.current = tabs;
 
-    // タブ切り替え後に復元すべき情報を保持する
-    // switchGeneration でどの切り替えに対応する pending かを追跡する
-    const pendingRestoreRef = useRef<{
+    // 復元すべき情報を保持
+    const pendingDrawRef = useRef<{
         zoom: number;
         scrollLeft: number;
         scrollTop: number;
         psd: PsdRoot | null;
-        generation: number;
     } | null>(null);
-    const switchGenerationRef = useRef(0);
 
     // 常に最新の ui 値を保持
     outgoingUiRef.current = { zoom, flipX, flipY, closedKeys: Array.from(closedKeys) };
@@ -67,7 +63,7 @@ export const useTabSync = ({
         updateTab(prevId, {
             zoom: z, flipX: fx, flipY: fy, closedKeys: ck,
             scrollLeft: scrollRef.current?.scrollLeft ?? 0,
-            scrollTop:  scrollRef.current?.scrollTop  ?? 0,
+            scrollTop: scrollRef.current?.scrollTop ?? 0,
         });
 
         prevActiveIdRef.current = activeId;
@@ -75,22 +71,20 @@ export const useTabSync = ({
         const nextTab = tabsRef.current.find(t => t.id === activeId);
         if (!nextTab) return;
 
-        // ドラッグ中状態をリセット
+        // ドラッグ・リネームのリセット
         layerDragCleanup();
         if (favoriteDragCleanupRef.current) {
             favoriteDragCleanupRef.current();
             favoriteDragCleanupRef.current = null;
             setFavoriteDrop(null);
         }
-
-        // リネームセッションをリセット
         renameSessionRef.current = false;
         if (renameTimerRef.current) {
             clearTimeout(renameTimerRef.current);
             renameTimerRef.current = null;
         }
 
-        // psd・flip・closedKeys などを即時復元
+        // 次タブの状態を復元
         resetHistory(nextTab.psd ?? null);
         setCurrentFilePath(nextTab.filePath);
         setFlipX(nextTab.flipX);
@@ -100,14 +94,12 @@ export const useTabSync = ({
         setZoomInputActive(false);
         isFirstLoadRef.current = true;
 
-        // generation をインクリメントして pending を記録
-        const gen = ++switchGenerationRef.current;
-        pendingRestoreRef.current = {
+        // zoom/scroll/描画の復元情報を記録
+        pendingDrawRef.current = {
             zoom: nextTab.zoom,
             scrollLeft: nextTab.scrollLeft,
-            scrollTop:  nextTab.scrollTop,
+            scrollTop: nextTab.scrollTop,
             psd: nextTab.psd ?? null,
-            generation: gen,
         };
     }, [
         activeId, updateTab, resetHistory, layerDragCleanup,
@@ -116,38 +108,40 @@ export const useTabSync = ({
         setClosedKeys, setSearchQuery, setZoomInputActive,
     ]);
 
-    // ── psd state が React に反映された後で zoom/scroll/描画を適用 ─────────────
+    // ── psd の React state が更新されてから zoom/scroll/描画を適用 ─────────────
+    //
+    // resetHistory(nextTab.psd) を呼んだ後、React が setPsd(next) を処理して
+    // 再レンダーが終わると psd が新しい値になる。
+    // その時点でこの useEffect が発火するので、ここで描画を行う。
+    //
+    // 依存配列に psd だけを入れることで「psd が変わったら必ず1回実行」になる。
     useEffect(() => {
-        const pending = pendingRestoreRef.current;
+        const pending = pendingDrawRef.current;
         if (!pending) return;
 
-        // resetHistory で設定した psd と現在の React state の psd が
-        // 参照レベルで一致するまで待つ。
-        // ただし、両方が null の場合（空タブへの切り替え）は即時実行する。
-        const bothNull = psd === null && pending.psd === null;
-        if (!bothNull && psd !== pending.psd) return;
+        // psd state が pending に記録した値と一致するまで待つ。
+        // null 同士の場合（空タブへの切り替え）は即実行。
+        if (psd !== pending.psd) return;
 
-        // 対応する generation か確認（連続切り替え時に古い pending が残らないよう）
-        if (pending.generation !== switchGenerationRef.current) {
-            pendingRestoreRef.current = null;
-            return;
-        }
+        pendingDrawRef.current = null;
 
-        pendingRestoreRef.current = null;
-
-        requestAnimationFrame(() => {
+        // RAF でレイアウト確定後に実行
+        const rafId = requestAnimationFrame(() => {
             applyZoom(pending.zoom);
 
             const el = scrollRef.current;
             if (el) {
                 el.scrollLeft = pending.scrollLeft;
-                el.scrollTop  = pending.scrollTop;
+                el.scrollTop = pending.scrollTop;
             }
 
-            // キャンバスを強制再描画（psd がある場合）
+            // psd があれば強制再描画（useEditorCanvas の useEffect だけでは
+            // タイミングによって描画がスキップされることがあるため）
             if (pending.psd) {
                 drawCanvas(pending.psd);
             }
         });
+
+        return () => cancelAnimationFrame(rafId);
     }, [psd, applyZoom, scrollRef, drawCanvas]);
 };
