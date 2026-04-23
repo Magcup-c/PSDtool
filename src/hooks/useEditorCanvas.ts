@@ -20,12 +20,6 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
     flipYRef.current = flipY;
     flipEnabledRef.current = flipEnabled;
 
-    const getFlipSuffix = useCallback(() => {
-        if (flipX && flipY) return ':flipxy';
-        if (flipX) return ':flipx';
-        if (flipY) return ':flipy';
-        return '';
-    }, [flipX, flipY]);
 
     const hasFlipSuffix = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
     const getBaseName = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
