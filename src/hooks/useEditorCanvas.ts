@@ -12,7 +12,7 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
     const drawDirtyRef = useRef(false);
     const drawRafRef = useRef<number | null>(null);
 
-    // flipX/flipY/flipEnabled を ref でも保持して drawCanvas が常に最新値を参照できるようにする
+    // flip 系は ref でも保持して drawCanvas が stale closure にならないようにする
     const flipXRef = useRef(flipX);
     const flipYRef = useRef(flipY);
     const flipEnabledRef = useRef(flipEnabled);
@@ -20,15 +20,18 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
     flipYRef.current = flipY;
     flipEnabledRef.current = flipEnabled;
 
-
     const hasFlipSuffix = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
     const getBaseName = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
 
+    // drawCanvas は targetPsd を直接受け取る。
+    // psdRef には依存しない（タブ切り替え時の不整合を防ぐ）。
     const drawCanvas = useCallback((targetPsd?: any) => {
         const canvas = canvasRef.current;
         if (!canvas || !canvas.isConnected) return;
 
-        const currentPsd = targetPsd ?? psdRef.current;
+        // targetPsd が明示的に渡された場合はそれを使う。
+        // 渡されない場合は psdRef.current を使う（通常の描画パス）。
+        const currentPsd = (targetPsd !== undefined) ? targetPsd : psdRef.current;
         if (!currentPsd) return;
 
         const ctx = canvas.getContext('2d');
@@ -37,6 +40,7 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
         const w = currentPsd.width, h = currentPsd.height;
         if (!w || !h) return;
 
+        // canvas リサイズ（内容がクリアされるので必ず再描画する）
         if (canvas.width !== w || canvas.height !== h) {
             canvas.width = w;
             canvas.height = h;
@@ -44,13 +48,13 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
             ctx.clearRect(0, 0, w, h);
         }
 
-        // ref から最新の flip 状態を取得（stale closure 回避）
+        // ref から最新の flip 状態を取得
         const fx = flipXRef.current;
         const fy = flipYRef.current;
         const fe = flipEnabledRef.current;
-        const flipSuffix = fe ? (
-            fx && fy ? ':flipxy' : fx ? ':flipx' : fy ? ':flipy' : ''
-        ) : '';
+        const flipSuffix = fe
+            ? (fx && fy ? ':flipxy' : fx ? ':flipx' : fy ? ':flipy' : '')
+            : '';
 
         ctx.save();
         if (fx && fy) { ctx.translate(w, h); ctx.scale(-1, -1); }
@@ -79,15 +83,15 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
                     if (plainNameSet.has(getBaseName(name).toLowerCase())) continue;
                 }
                 const effectiveLayer = flipMap.get(lowerName) ?? layer;
-                if (effectiveLayer.children) drawLayers(effectiveLayer.children);
-                else if (effectiveLayer._bitmap) {
+                if (effectiveLayer.children) {
+                    drawLayers(effectiveLayer.children);
+                } else if (effectiveLayer._bitmap) {
                     try {
                         ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
                     } catch (e) {
                         console.warn('[drawCanvas] Failed to draw layer bitmap:', e);
                     }
-                }
-                else if (effectiveLayer.canvas) {
+                } else if (effectiveLayer.canvas) {
                     try {
                         ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
                     } catch (e) {
@@ -97,8 +101,9 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
             }
         };
 
-        if (currentPsd.children) drawLayers(currentPsd.children);
-        else if (currentPsd._bitmap) {
+        if (currentPsd.children) {
+            drawLayers(currentPsd.children);
+        } else if (currentPsd._bitmap) {
             try {
                 ctx.drawImage(currentPsd._bitmap, 0, 0);
             } catch (e) {
@@ -109,16 +114,20 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
         drawDirtyRef.current = false;
     }, [hasFlipSuffix, getBaseName, psdRef]);
 
+    // psd または flip 系が変わったら再描画
     useEffect(() => {
         if (!psd) return;
         drawDirtyRef.current = true;
         if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
         drawRafRef.current = requestAnimationFrame(() => {
-            drawCanvas(psd);
             drawRafRef.current = null;
+            drawCanvas(psd);
         });
         return () => {
-            if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
+            if (drawRafRef.current) {
+                cancelAnimationFrame(drawRafRef.current);
+                drawRafRef.current = null;
+            }
         };
     }, [psd, flipX, flipY, flipEnabled, drawCanvas]);
 

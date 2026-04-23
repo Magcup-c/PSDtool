@@ -76,10 +76,9 @@ const PsdEditor = () => {
     const {
         canvasRef, flipX, setFlipX, flipY, setFlipY, radioEnabled, setRadioEnabled,
         lockedEnabled, setLockedEnabled, flipEnabled, setFlipEnabled,
-        drawRafRef, hasFlipSuffix, drawCanvas,
+        drawCanvas, drawRafRef, hasFlipSuffix,
     } = useEditorCanvas(psd, psdRef);
 
-    // ★ applyZoom を取り出す
     const { zoom, handleZoom, setZoomTo, resetZoom, centerPsd, fitToScreen, SCROLL_AREA, applyZoom } =
         useZoomPan(psdRef, scrollRef, canvasContainerRef, settings.scrollAction ?? 'pan');
 
@@ -116,7 +115,6 @@ const PsdEditor = () => {
         layerScrollRef, psdRef, commitPsd, () => tabManager.markDirty()
     );
 
-    // ★ drawCanvas を渡して、タブ切り替え時に強制再描画できるようにする
     useTabSync({
         activeId, tabs, updateTab, scrollRef, canvasContainerRef, zoom, flipX, flipY, closedKeys,
         resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
@@ -160,12 +158,10 @@ const PsdEditor = () => {
         setClosedKeys(new Set());
     }, [tabManager, resetHistory, setFlipX, setFlipY, setClosedKeys]);
 
-    // ★ タブを閉じる処理
     const handleCloseTab = useCallback((id: string) => {
         const currentTabs = tabsRef.current;
 
         if (currentTabs.length === 1) {
-            // ── 最後の1枚: コンテンツをリセットして空タブにする ──────────────
             resetHistory(null);
             setCurrentFilePath(null);
             setFlipX(false);
@@ -183,7 +179,6 @@ const PsdEditor = () => {
             return;
         }
 
-        // ── 複数タブ: 閉じた後にアクティブになるタブを先に計算して復元 ────────
         const closedIdx = currentTabs.findIndex(t => t.id === id);
         const nextTabs = currentTabs.filter(t => t.id !== id);
         const nextTab = nextTabs[Math.min(closedIdx, nextTabs.length - 1)];
@@ -202,6 +197,7 @@ const PsdEditor = () => {
             const sl = nextTab.scrollLeft;
             const st = nextTab.scrollTop;
             const nextPsd = nextTab.psd ?? null;
+
             requestAnimationFrame(() => {
                 applyZoom(z);
                 const el = scrollRef.current;
@@ -209,7 +205,6 @@ const PsdEditor = () => {
                     el.scrollLeft = sl;
                     el.scrollTop = st;
                 }
-                // 強制再描画
                 if (nextPsd) {
                     drawCanvas(nextPsd);
                 }
