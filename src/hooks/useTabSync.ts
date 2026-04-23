@@ -27,8 +27,6 @@ interface UseTabSyncProps {
     renameSessionRef: React.MutableRefObject<boolean>;
     renameTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
     psd: PsdRoot | null;
-    /** タブ復元後に明示的にキャンバスを再描画するコールバック */
-    drawCanvas: (psd?: PsdRoot) => void;
 }
 
 export const useTabSync = ({
@@ -36,7 +34,7 @@ export const useTabSync = ({
     resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
     setSearchQuery, setZoomInputActive, applyZoom, isFirstLoadRef,
     layerDragCleanup, favoriteDragCleanupRef, setFavoriteDrop,
-    renameSessionRef, renameTimerRef, psd, drawCanvas,
+    renameSessionRef, renameTimerRef, psd,
 }: UseTabSyncProps) => {
     const prevActiveIdRef = useRef<string>(activeId);
     const outgoingUiRef = useRef({ zoom, flipX, flipY, closedKeys: Array.from(closedKeys) });
@@ -44,14 +42,14 @@ export const useTabSync = ({
     const tabsRef = useRef(tabs);
     tabsRef.current = tabs;
 
-    // タブ切り替え後に psd が DOM に現れてから適用する zoom/scroll/psd を保持する
+    // タブ切り替え後に適用する zoom/scroll を保持
     const pendingRestoreRef = useRef<{
         zoom: number;
         scrollLeft: number;
         scrollTop: number;
-        psd: PsdRoot | null;
     } | null>(null);
 
+    // 毎レンダーで最新の UI 状態を ref に同期
     outgoingUiRef.current = { zoom, flipX, flipY, closedKeys: Array.from(closedKeys) };
 
     // ── タブ切り替え検出 ──────────────────────────────────────────────────────
@@ -59,7 +57,7 @@ export const useTabSync = ({
         const prevId = prevActiveIdRef.current;
         if (prevId === activeId) return;
 
-        // 退出するタブのUI状態を保存
+        // 退出するタブの UI 状態を保存
         const { zoom: z, flipX: fx, flipY: fy, closedKeys: ck } = outgoingUiRef.current;
         updateTab(prevId, {
             zoom: z, flipX: fx, flipY: fy, closedKeys: ck,
@@ -87,7 +85,9 @@ export const useTabSync = ({
             renameTimerRef.current = null;
         }
 
-        // psd・flip・closedKeys などを即時復元
+        // ★ psd・flip・closedKeys などを即時復元
+        // resetHistory → setPsd(nextTab.psd) → psd state 変化
+        // → useEditorCanvas の useEffect が発火 → drawCanvas(psd) が自動で呼ばれる
         resetHistory(nextTab.psd ?? null);
         setCurrentFilePath(nextTab.filePath);
         setFlipX(nextTab.flipX);
@@ -97,13 +97,11 @@ export const useTabSync = ({
         setZoomInputActive(false);
         isFirstLoadRef.current = true;
 
-        // zoom と scroll は psd state が確定してからの useEffect で適用する
-        // psdも一緒に保持して drawCanvas に渡せるようにする
+        // zoom と scroll は psd の DOM 反映後に適用する
         pendingRestoreRef.current = {
             zoom: nextTab.zoom,
             scrollLeft: nextTab.scrollLeft,
             scrollTop: nextTab.scrollTop,
-            psd: nextTab.psd ?? null,
         };
     }, [
         activeId, updateTab, resetHistory, layerDragCleanup,
@@ -112,15 +110,16 @@ export const useTabSync = ({
         setClosedKeys, setSearchQuery, setZoomInputActive,
     ]);
 
-    // ── psd が確定してDOMが更新された後に zoom/scroll/描画 を適用 ─────────────
+    // ── psd が確定して DOM が更新された後に zoom/scroll を適用 ──────────────
+    // psd を依存に入れることで resetHistory → setPsd → re-render の後に必ず発火する。
+    // このタイミングで canvasContainerRef のサイズも新しい psd の width/height に
+    // 更新されているため applyZoom が正しく動作する。
     useEffect(() => {
         const pending = pendingRestoreRef.current;
         if (!pending) return;
         pendingRestoreRef.current = null;
 
-        // RAF で1フレーム待ってから適用することで
-        // psd の width/height が canvasContainerRef のスタイルに反映された後に
-        // applyZoom、scroll、drawCanvas が正しく動作する
+        // RAF で1フレーム待つことで PreviewArea の style 更新後に実行される
         const raf = requestAnimationFrame(() => {
             applyZoom(pending.zoom);
             const el = scrollRef.current;
@@ -128,12 +127,7 @@ export const useTabSync = ({
                 el.scrollLeft = pending.scrollLeft;
                 el.scrollTop = pending.scrollTop;
             }
-            // 明示的に再描画: psd参照が同一オブジェクトの場合でも確実に描画する
-            if (pending.psd) {
-                drawCanvas(pending.psd);
-            }
         });
         return () => cancelAnimationFrame(raf);
-        // psd を依存に入れることで resetHistory → setPsd → re-render の後に必ず発火する
-    }, [psd, applyZoom, scrollRef, drawCanvas]);
+    }, [psd, applyZoom, scrollRef]);
 };
