@@ -11,48 +11,46 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
 
     psdRef.current = psd;
 
-    const activeBitmapsRef = useRef<Set<ImageBitmap>>(new Set());
-
     const MAX_UNDO = 50;
 
-    // resetHistory で渡された外部psdのbitmapをcloseから守るためのセット。
-    // タブのpsdはタブマネージャが所有権を持つので、ここではcloseしてはいけない。
-    const protectedPsdRef = useRef<Set<PsdRoot>>(new Set());
+    // undoスタックから取り除かれたpsd専用のbitmapだけを管理する。
+    // 現在のpsd・タブのpsdのbitmapはここでは絶対にcloseしない。
+    // タブのpsdはタブマネージャが所有権を持つため。
+    const orphanedBitmapsRef = useRef<Set<ImageBitmap>>(new Set());
 
-    const cleanupResources = useCallback(() => {
-        const currentInUse = new Set<ImageBitmap>();
+    // undoスタックから溢れて捨てられたpsdのbitmapだけをclose対象に追加する
+    const scheduleOrphanClose = useCallback((droppedPsd: PsdRoot) => {
+        collectBitmaps(droppedPsd).forEach(b => orphanedBitmapsRef.current.add(b));
+    }, []);
 
-        // 現在の psd
-        collectBitmaps(psdRef.current).forEach(b => currentInUse.add(b));
+    // orphanedBitmapsRef の中で、現在のpsd・undoStack・redoStackに
+    // 含まれていないものだけをcloseする
+    const flushOrphanedBitmaps = useCallback(() => {
+        if (orphanedBitmapsRef.current.size === 0) return;
 
-        // undo/redo スタック
-        undoStack.current.forEach(item => {
-            collectBitmaps(item).forEach(b => currentInUse.add(b));
-        });
-        redoStack.current.forEach(item => {
-            collectBitmaps(item).forEach(b => currentInUse.add(b));
-        });
-
-        // 保護されたpsd（タブマネージャが所有するpsd）のbitmapはcloseしない
-        protectedPsdRef.current.forEach(protectedPsd => {
-            collectBitmaps(protectedPsd).forEach(b => currentInUse.add(b));
-        });
+        // 現在使用中のbitmapを収集
+        const inUse = new Set<ImageBitmap>();
+        collectBitmaps(psdRef.current).forEach(b => inUse.add(b));
+        undoStack.current.forEach(p => collectBitmaps(p).forEach(b => inUse.add(b)));
+        redoStack.current.forEach(p => collectBitmaps(p).forEach(b => inUse.add(b)));
 
         const toClose: ImageBitmap[] = [];
-        activeBitmapsRef.current.forEach(b => {
-            if (!currentInUse.has(b)) toClose.push(b);
+        orphanedBitmapsRef.current.forEach(b => {
+            if (!inUse.has(b)) toClose.push(b);
         });
 
         if (toClose.length > 0) {
             closeBitmaps(toClose);
+            toClose.forEach(b => orphanedBitmapsRef.current.delete(b));
         }
-        activeBitmapsRef.current = currentInUse;
     }, []);
 
     useEffect(() => {
         return () => {
-            closeBitmaps(activeBitmapsRef.current);
-            activeBitmapsRef.current.clear();
+            // アンマウント時はorphanedBitmapsだけclose
+            // タブのpsdはタブマネージャ側でcloseする責任がある
+            closeBitmaps(orphanedBitmapsRef.current);
+            orphanedBitmapsRef.current.clear();
         };
     }, []);
 
@@ -61,31 +59,51 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
             canUndo: undoStack.current.length > 0,
             canRedo: redoStack.current.length > 0,
         });
-        cleanupResources();
-    }, [cleanupResources]);
+        flushOrphanedBitmaps();
+    }, [flushOrphanedBitmaps]);
 
-    const commitPsd = useCallback((nextLevelPsd: PsdRoot) => {
+    const commitPsd = useCallback((nextPsd: PsdRoot) => {
         const current = psdRef.current;
         if (!current) {
-            psdRef.current = nextLevelPsd;
-            setPsd(nextLevelPsd);
+            psdRef.current = nextPsd;
+            setPsd(nextPsd);
             syncHistoryState();
             return;
         }
+
+        // undoStackが上限を超える場合、溢れたpsdのbitmapをorphan登録
+        if (undoStack.current.length >= MAX_UNDO) {
+            const dropped = undoStack.current[0];
+            scheduleOrphanClose(dropped);
+        }
+
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), current];
+
+        // redoStackをクリアする際、redoStackのpsdのbitmapもorphan登録
+        redoStack.current.forEach(p => scheduleOrphanClose(p));
         redoStack.current = [];
-        psdRef.current = nextLevelPsd;
-        setPsd(nextLevelPsd);
+
+        psdRef.current = nextPsd;
+        setPsd(nextPsd);
         syncHistoryState();
-    }, [syncHistoryState]);
+    }, [syncHistoryState, scheduleOrphanClose]);
 
     const pushSnapshot = useCallback((forcePsd?: PsdRoot) => {
         const snapshot = forcePsd || psdRef.current;
         if (!snapshot) return;
+
+        if (undoStack.current.length >= MAX_UNDO) {
+            const dropped = undoStack.current[0];
+            scheduleOrphanClose(dropped);
+        }
+
         undoStack.current = [...undoStack.current.slice(-(MAX_UNDO - 1)), snapshot];
+
+        redoStack.current.forEach(p => scheduleOrphanClose(p));
         redoStack.current = [];
+
         syncHistoryState();
-    }, [syncHistoryState]);
+    }, [syncHistoryState, scheduleOrphanClose]);
 
     const handleUndo = useCallback(() => {
         if (!undoStack.current.length) return;
@@ -135,25 +153,26 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
         }
     }, [commitPsd]);
 
-    // resetHistory: タブ切り替え時などに外部からpsdをセットする。
-    // 渡されたpsdのbitmapはタブマネージャが所有しているため、
-    // cleanupResources でcloseしてはいけない。protectedPsdRef で保護する。
+    // resetHistory: タブ切り替え時に外部からpsdをセットする。
+    // undoStack・redoStackをクリアするが、bitmapはcloseしない。
+    // タブのpsdのbitmapはタブマネージャが所有するため、
+    // ここでcloseする権限はない。
     const resetHistory = useCallback((next: PsdRoot | null) => {
-        // 新しいpsdを保護リストに追加（cleanupResourcesがcloseしないよう守る）
-        protectedPsdRef.current.clear();
-        if (next) {
-            protectedPsdRef.current.add(next);
-        }
+        // undoStack・redoStackを捨てる際、bitmapをorphan登録してclose対象にする
+        // ただしnextのbitmapと重複している場合はcloseしてはいけないので
+        // flushOrphanedBitmaps内のinUse判定に任せる
+        undoStack.current.forEach(p => scheduleOrphanClose(p));
+        redoStack.current.forEach(p => scheduleOrphanClose(p));
 
         undoStack.current = [];
         redoStack.current = [];
         psdRef.current = next;
         setPsd(next);
 
-        // cleanupResources は protectedPsdRef を参照するので
-        // next の bitmap は close されない
+        // flushOrphanedBitmaps は psdRef.current（= next）のbitmapを inUse に含めてから
+        // closeするため、next のbitmapが誤ってcloseされることはない
         syncHistoryState();
-    }, [syncHistoryState]);
+    }, [syncHistoryState, scheduleOrphanClose]);
 
     return {
         psd,
