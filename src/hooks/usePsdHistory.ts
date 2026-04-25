@@ -9,26 +9,33 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
     const redoStack = useRef<PsdRoot[]>([]);
     const psdRef = useRef<PsdRoot | null>(null);
 
-    // ★ FIX: refをレンダー中に同期更新する
-    // useEffect内で更新すると、同じレンダーサイクル内の他のeffect（drawCanvasなど）が
-    // 古いpsdRef.currentを参照してしまうタイミング問題が発生する。
-    // refへの書き込みはReactが許容する副作用パターン。
     psdRef.current = psd;
 
-    // 現在使用中の全ビットマップを追跡（リーク防止用）
     const activeBitmapsRef = useRef<Set<ImageBitmap>>(new Set());
 
     const MAX_UNDO = 50;
 
+    // resetHistory で渡された外部psdのbitmapをcloseから守るためのセット。
+    // タブのpsdはタブマネージャが所有権を持つので、ここではcloseしてはいけない。
+    const protectedPsdRef = useRef<Set<PsdRoot>>(new Set());
+
     const cleanupResources = useCallback(() => {
         const currentInUse = new Set<ImageBitmap>();
-        
+
+        // 現在の psd
         collectBitmaps(psdRef.current).forEach(b => currentInUse.add(b));
+
+        // undo/redo スタック
         undoStack.current.forEach(item => {
             collectBitmaps(item).forEach(b => currentInUse.add(b));
         });
         redoStack.current.forEach(item => {
             collectBitmaps(item).forEach(b => currentInUse.add(b));
+        });
+
+        // 保護されたpsd（タブマネージャが所有するpsd）のbitmapはcloseしない
+        protectedPsdRef.current.forEach(protectedPsd => {
+            collectBitmaps(protectedPsd).forEach(b => currentInUse.add(b));
         });
 
         const toClose: ImageBitmap[] = [];
@@ -42,7 +49,6 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
         activeBitmapsRef.current = currentInUse;
     }, []);
 
-    // アンマウント時に全リソース解放
     useEffect(() => {
         return () => {
             closeBitmaps(activeBitmapsRef.current);
@@ -129,11 +135,23 @@ export function usePsdHistory(initialPsd: PsdRoot | null) {
         }
     }, [commitPsd]);
 
+    // resetHistory: タブ切り替え時などに外部からpsdをセットする。
+    // 渡されたpsdのbitmapはタブマネージャが所有しているため、
+    // cleanupResources でcloseしてはいけない。protectedPsdRef で保護する。
     const resetHistory = useCallback((next: PsdRoot | null) => {
+        // 新しいpsdを保護リストに追加（cleanupResourcesがcloseしないよう守る）
+        protectedPsdRef.current.clear();
+        if (next) {
+            protectedPsdRef.current.add(next);
+        }
+
         undoStack.current = [];
         redoStack.current = [];
         psdRef.current = next;
         setPsd(next);
+
+        // cleanupResources は protectedPsdRef を参照するので
+        // next の bitmap は close されない
         syncHistoryState();
     }, [syncHistoryState]);
 
