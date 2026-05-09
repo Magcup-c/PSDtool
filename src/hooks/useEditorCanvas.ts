@@ -1,6 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { PsdLayerNode } from '../types';
 
+// undefined との区別が必要なので専用センチネルを使う。
+// drawCanvas(USE_PSD_REF) → psdRef.current を使う（従来の引数なし呼び出しと同義）
+// drawCanvas(null)        → 何もしない（将来のキャンバスクリア用途に対応）
+const USE_PSD_REF = Symbol('USE_PSD_REF');
+
 export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) => {
     const [flipX, setFlipX] = useState(false);
     const [flipY, setFlipY] = useState(false);
@@ -23,13 +28,18 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
     const hasFlipSuffix = useCallback((name: string) => /(:[Ff]lip(xy|x|y))$/i.test(name), []);
     const getBaseName = useCallback((name: string) => name.replace(/(:[Ff]lip(xy|x|y))$/i, ''), []);
 
-    // drawCanvas は常に targetPsd 引数を優先して使う。
-    // 引数なしの場合のみ psdRef.current にフォールバックする。
-    const drawCanvas = useCallback((targetPsd?: any) => {
+    // drawCanvas は targetPsd を明示指定できる。
+    //   drawCanvas()        → psdRef.current を使用（タブ切り替えなど）
+    //   drawCanvas(somePsd) → somePsd を使用
+    //   drawCanvas(null)    → 何もしない（将来のクリア用途を安全にブロック）
+    const drawCanvas = useCallback((targetPsd: any = USE_PSD_REF) => {
         const canvas = canvasRef.current;
         if (!canvas || !canvas.isConnected) return;
 
-        const currentPsd = (targetPsd !== undefined) ? targetPsd : psdRef.current;
+        // null を明示的に渡した場合は描画しない
+        if (targetPsd === null) return;
+
+        const currentPsd = targetPsd === USE_PSD_REF ? psdRef.current : targetPsd;
         if (!currentPsd) return;
 
         const ctx = canvas.getContext('2d');

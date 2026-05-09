@@ -1,5 +1,11 @@
 /**
  * src/hooks/usePsdLoader.ts
+ *
+ * 修正点:
+ *   - エラー時の closeTab を「複数タブのときのみ」に変更。
+ *     1枚のときは空タブのままにしてユーザーが再操作できる状態を保つ。
+ *   - closeTab 呼び出し前に loadGenByTabRef から targetId を明示削除し、
+ *     finally での二重削除と世代混在を防ぐ。
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -58,6 +64,7 @@ export const usePsdLoader = ({
         setIsLoading(true);
         isFirstLoadRef.current = true;
 
+        /** 現在も同じ世代でこのタブへのロードが有効かを確認 */
         const tabStillTargeted = () => loadGenByTabRef.current.get(targetId) === g;
 
         try {
@@ -106,10 +113,30 @@ export const usePsdLoader = ({
             if (tabStillTargeted()) {
                 const msg = err instanceof Error ? err.message : String(err);
                 showToast(`${L.loadFailed}: ${msg}`, 'error');
-                // 失敗したタブを閉じる（空タブが残らないように）
-                tabManager.closeTab(targetId);
+
+                // 世代を明示削除してから closeTab を呼ぶ。
+                // これにより finally での削除と二重にならず、
+                // closeTab 後に同じ targetId で別ロードが始まっても世代が混在しない。
+                loadGenByTabRef.current.delete(targetId);
+
+                // 複数タブがある場合のみ失敗タブを閉じる。
+                // 1枚しかない場合は空タブのままにしてユーザーが再操作できる状態を保つ。
+                const currentTabs = tabsRef.current;
+                if (currentTabs.length > 1) {
+                    tabManager.closeTab(targetId);
+                } else {
+                    // 1枚のとき: ローディング表示だけ解除して空タブに戻す
+                    tabManager.updateTab(targetId, {
+                        isLoading: false,
+                        psd: null,
+                        filePath: null,
+                        fileName: 'Untitled',
+                        isDirty: false,
+                    });
+                }
             }
         } finally {
+            // 世代が残っている場合のみ削除（エラー時は catch 内で削除済みなので冪等）
             if (loadGenByTabRef.current.get(targetId) === g) {
                 loadGenByTabRef.current.delete(targetId);
             }

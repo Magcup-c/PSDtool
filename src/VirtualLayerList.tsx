@@ -2,10 +2,8 @@
  * VirtualLayerList.tsx
  * 仮想スクロール付きレイヤーリスト（ドラッグ中は全行描画して DnD の座標検出を維持）
  *
- * 修正: LayerThumbnailCell を canvas 直描画 → ObjectURL + <img> 方式に変更
- *   - bitmap が null/undefined のレイヤーで _dataUrl フォールバックを使うように
- *   - ステップダウンスケールで品質向上（LayerThumbnail.tsx と同じロジック）
- *   - deferred bitmap が後から届いた際も objectUrl が更新されサムネが表示される
+ * 修正: LayerThumbnailCell — bitmap が close 済みでエラーになった場合に
+ *       dataUrl へフォールバックし、UIにアイコンが表示されるよう改善
  */
 import React, {
     memo, useMemo, useCallback, useEffect, useState, forwardRef,
@@ -89,8 +87,13 @@ const LayerThumbnailCell = memo(({
     bitmap, dataUrl, hasChildren,
 }: { bitmap?: ImageBitmap | null; dataUrl?: string | null; hasChildren: boolean }) => {
     const [objectUrl, setObjectUrl] = useState<string | null>(null);
+    // bitmap の描画に失敗したかどうか（close済みなど）
+    const [bitmapFailed, setBitmapFailed] = useState(false);
 
     useEffect(() => {
+        // bitmap が変わったらエラーフラグをリセット
+        setBitmapFailed(false);
+
         if (!bitmap || hasChildren) { setObjectUrl(null); return; }
         let cancelled = false;
         let createdUrl: string | null = null;
@@ -128,9 +131,12 @@ const LayerThumbnailCell = memo(({
                     if (prev) URL.revokeObjectURL(prev);
                     return url;
                 });
-            } catch (e) {
-                // bitmap が close() 済みの場合など
-                console.warn('[LayerThumbnailCell] Failed to render thumbnail:', e);
+            } catch {
+                // bitmap が close() 済みなどの場合は dataUrl へフォールバック
+                if (!cancelled) {
+                    setObjectUrl(null);
+                    setBitmapFailed(true);
+                }
             }
         })();
 
@@ -140,8 +146,8 @@ const LayerThumbnailCell = memo(({
         };
     }, [bitmap, hasChildren]);
 
-    // objectUrl → dataUrl の順でフォールバック
-    const src = objectUrl ?? (!hasChildren ? (dataUrl ?? null) : null);
+    // objectUrl → dataUrl (bitmapFailed 時) → アイコン の順でフォールバック
+    const src = objectUrl ?? ((!hasChildren && (bitmapFailed || !bitmap)) ? (dataUrl ?? null) : null);
 
     return (
         <div className="layer-preview-thumbnail" style={{ flexShrink: 0 }}>
@@ -287,7 +293,6 @@ const LayerRow = memo(({
                     </span>
                 )}
 
-                {/* 修正: bitmap と dataUrl 両方を渡す */}
                 <LayerThumbnailCell
                     bitmap={layer._bitmap}
                     dataUrl={layer._dataUrl}

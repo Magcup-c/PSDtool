@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 const STORAGE_KEY = 'psd-studio-recent-files';
 
@@ -30,7 +30,26 @@ function basename(path: string): string {
 }
 
 export function useRecentFiles(maxCount: number) {
-    const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => loadRecent());
+    const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => {
+        const loaded = loadRecent();
+        // 初期化時点で maxCount を超えている場合は切り詰める
+        if (loaded.length > maxCount) {
+            const trimmed = loaded.slice(0, maxCount);
+            saveRecent(trimmed);
+            return trimmed;
+        }
+        return loaded;
+    });
+
+    // maxCount が変化したとき（設定変更）、超過分を削除する
+    useEffect(() => {
+        setRecentFiles(prev => {
+            if (prev.length <= maxCount) return prev;
+            const trimmed = prev.slice(0, maxCount);
+            saveRecent(trimmed);
+            return trimmed;
+        });
+    }, [maxCount]);
 
     const addRecentFile = useCallback((path: string) => {
         setRecentFiles(prev => {

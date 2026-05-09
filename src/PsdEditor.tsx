@@ -270,6 +270,7 @@ const PsdEditor = () => {
                 <SettingsModal
                     settings={settings} onUpdate={updateSettings}
                     onClose={() => ui.setShowSettings(false)} onPreview={ui.handlePreviewTheme}
+                    onError={msg => showToast(msg, 'error')}
                 />
             )}
 

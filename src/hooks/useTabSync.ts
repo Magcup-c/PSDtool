@@ -30,6 +30,18 @@ interface UseTabSyncProps {
     drawCanvas: (psd?: PsdRoot | null) => void;
 }
 
+interface PendingRestore {
+    /** どのタブへの切り替えで生成された pending か */
+    tabId: string;
+    zoom: number;
+    scrollLeft: number;
+    scrollTop: number;
+    /** resetHistory に渡した psd（参照比較用） */
+    psd: PsdRoot | null;
+    /** psd が変化しない場合（null→null 等）に RAF で即フラッシュするフラグ */
+    skipPsdWait: boolean;
+}
+
 export const useTabSync = ({
     activeId, tabs, updateTab, scrollRef, zoom, flipX, flipY, closedKeys,
     resetHistory, setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
@@ -42,13 +54,7 @@ export const useTabSync = ({
     const tabsRef = useRef(tabs);
     tabsRef.current = tabs;
 
-    // 復元すべき情報を保持
-    const pendingDrawRef = useRef<{
-        zoom: number;
-        scrollLeft: number;
-        scrollTop: number;
-        psd: PsdRoot | null;
-    } | null>(null);
+    const pendingDrawRef = useRef<PendingRestore | null>(null);
 
     // 常に最新の ui 値を保持
     outgoingUiRef.current = { zoom, flipX, flipY, closedKeys: Array.from(closedKeys) };
@@ -85,7 +91,8 @@ export const useTabSync = ({
         }
 
         // 次タブの状態を復元
-        resetHistory(nextTab.psd ?? null);
+        const nextPsd = nextTab.psd ?? null;
+        resetHistory(nextPsd);
         setCurrentFilePath(nextTab.filePath);
         setFlipX(nextTab.flipX);
         setFlipY(nextTab.flipY);
@@ -94,38 +101,75 @@ export const useTabSync = ({
         setZoomInputActive(false);
         isFirstLoadRef.current = true;
 
-        // zoom/scroll/描画の復元情報を記録
+        // pending を記録。
+        // skipPsdWait=true のケース: 現在の psd state と nextPsd が同一参照の場合、
+        // useEffect([psd]) が発火しないため RAF で直接フラッシュする。
+        // 典型例: 空タブ(null)→空タブ(null) の切り替え。
+        const currentPsd = psd; // useLayoutEffect は同期なのでこの時点の値を使う
         pendingDrawRef.current = {
+            tabId: activeId,
             zoom: nextTab.zoom,
             scrollLeft: nextTab.scrollLeft,
             scrollTop: nextTab.scrollTop,
-            psd: nextTab.psd ?? null,
+            psd: nextPsd,
+            skipPsdWait: currentPsd === nextPsd,
         };
+
+        // psd が変化しない場合は useEffect([psd]) が発火しないので、
+        // ここで RAF を即スケジュールしてフラッシュする
+        if (currentPsd === nextPsd) {
+            const rafId = requestAnimationFrame(() => {
+                const pending = pendingDrawRef.current;
+                // activeId がまだ同じタブを指しているか確認
+                if (!pending || pending.tabId !== activeId || !pending.skipPsdWait) return;
+                pendingDrawRef.current = null;
+
+                applyZoom(pending.zoom);
+                const el = scrollRef.current;
+                if (el) {
+                    el.scrollLeft = pending.scrollLeft;
+                    el.scrollTop = pending.scrollTop;
+                }
+                if (pending.psd) {
+                    drawCanvas(pending.psd);
+                }
+            });
+
+            // cleanup: コンポーネントアンマウント時やさらに切り替えが起きた場合は
+            // RAFをキャンセルして pending をクリア
+            return () => {
+                cancelAnimationFrame(rafId);
+                // 同じタブの pending のみクリア（別タブへの切り替えが割り込んだ場合は触らない）
+                if (pendingDrawRef.current?.tabId === activeId) {
+                    pendingDrawRef.current = null;
+                }
+            };
+        }
     }, [
         activeId, updateTab, resetHistory, layerDragCleanup,
         favoriteDragCleanupRef, setFavoriteDrop, renameSessionRef, renameTimerRef,
         isFirstLoadRef, setFlipX, setFlipY, scrollRef, setCurrentFilePath,
         setClosedKeys, setSearchQuery, setZoomInputActive,
+        // psd は依存配列に含めない（useLayoutEffect は psd の変化に反応しない）
+        // psd の現在値は outgoingUiRef 経由ではなく直接参照する
     ]);
 
     // ── psd の React state が更新されてから zoom/scroll/描画を適用 ─────────────
     //
-    // resetHistory(nextTab.psd) を呼んだ後、React が setPsd(next) を処理して
+    // resetHistory(nextPsd) を呼んだ後、React が setPsd(next) を処理して
     // 再レンダーが終わると psd が新しい値になる。
-    // その時点でこの useEffect が発火するので、ここで描画を行う。
-    //
-    // 依存配列に psd だけを入れることで「psd が変わったら必ず1回実行」になる。
+    // skipPsdWait=true のケースはすでに上の RAF で処理済みなので、
+    // ここでは skipPsdWait=false（psd が変化する）ケースだけを扱う。
     useEffect(() => {
         const pending = pendingDrawRef.current;
         if (!pending) return;
+        if (pending.skipPsdWait) return; // 上の RAF で処理済み
 
-        // psd state が pending に記録した値と一致するまで待つ。
-        // null 同士の場合（空タブへの切り替え）は即実行。
+        // psd state が pending に記録した値と一致するまで待つ
         if (psd !== pending.psd) return;
 
         pendingDrawRef.current = null;
 
-        // RAF でレイアウト確定後に実行
         const rafId = requestAnimationFrame(() => {
             applyZoom(pending.zoom);
 
@@ -135,8 +179,6 @@ export const useTabSync = ({
                 el.scrollTop = pending.scrollTop;
             }
 
-            // psd があれば強制再描画（useEditorCanvas の useEffect だけでは
-            // タイミングによって描画がスキップされることがあるため）
             if (pending.psd) {
                 drawCanvas(pending.psd);
             }

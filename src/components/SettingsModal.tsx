@@ -1,10 +1,12 @@
 /**
- * src/components/SettingsModal.tsx  (updated)
+ * src/components/SettingsModal.tsx
  *
  * 変更点:
  *   1. テーマ選択時に即時プレビュー（onPreview コールバック）
  *   2. 書き出し設定セクションを追加（形式・品質）
  *   3. Cancel 時にプレビューをロールバック
+ *   4. onError prop を追加し、Windows 以外での open_default_app_settings
+ *      エラーをトーストで通知する（console に握りつぶさない）
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -17,6 +19,8 @@ interface SettingsModalProps {
     onClose: () => void;
     /** テーマ即時プレビュー用 — モーダルを閉じずにテーマだけ切り替える */
     onPreview: (theme: AppSettings['theme']) => void;
+    /** エラー通知用 — 呼び出し元の showToast などに繋ぐ */
+    onError: (msg: string) => void;
 }
 
 const T = {
@@ -42,7 +46,7 @@ const T = {
         defaultApp: '既定のアプリ',
         defaultAppDesc: '.psdファイルを本アプリに関連付けます',
         openOSSettings: 'OSの設定を開く',
-        defaultAppNote: '※OS設定の「ファイルの種類ごとに既定のアプリを選ぶ」から、.psdを本アプリに変更してください。',
+        defaultAppNote: '※OS設定の「ファイルの種類ごとに既定のアプリを選ぶ」から、.psdを本アプリに変更してください。(Windows のみ対応)',
         themes: { black: 'Black', grey: 'Grey', light: 'Light', white: 'White' },
         help: 'ヘルプ',
         shortcuts: 'ショートカット (プレビューエリア)',
@@ -86,7 +90,7 @@ const T = {
         defaultApp: 'Default App',
         defaultAppDesc: 'Associate .psd files with this app',
         openOSSettings: 'Open OS Settings',
-        defaultAppNote: 'Note: Go to "Choose default apps by file type" in OS settings and change .psd to this app.',
+        defaultAppNote: 'Note: Go to "Choose default apps by file type" in OS settings and change .psd to this app. (Windows only)',
         themes: { black: 'Black', grey: 'Grey', light: 'Light', white: 'White' },
         help: 'Help',
         shortcuts: 'Shortcuts (Preview Area)',
@@ -123,7 +127,7 @@ const EXPORT_FORMATS: ExportFormat[] = ['png', 'jpeg', 'webp', 'svg'];
 
 import { invoke } from '@tauri-apps/api/core';
 
-export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: SettingsModalProps) => {
+export const SettingsModal = ({ settings, onUpdate, onClose, onPreview, onError }: SettingsModalProps) => {
     // ローカル編集状態（Cancel 時に捨てる）
     const [local, setLocal] = useState<AppSettings>({ ...settings });
     const [qualityCustom, setQualityCustom] = useState(() => !isPresetQuality(settings.exportQuality ?? 0.92));
@@ -152,8 +156,16 @@ export const SettingsModal = ({ settings, onUpdate, onClose, onPreview }: Settin
     }, [settings.theme, onPreview, onClose]);
 
     const handleOpenDefaultApps = async () => {
-        try { await invoke('open_default_app_settings'); }
-        catch (e) { console.error('Failed to open settings', e); }
+        try {
+            await invoke('open_default_app_settings');
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            onError(
+                local.language === 'ja'
+                    ? `OS設定を開けませんでした: ${msg}`
+                    : `Failed to open OS settings: ${msg}`
+            );
+        }
     };
 
     const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
