@@ -8,9 +8,10 @@
 
 node_modules/
 dist/
-src-tauri/target/
+/target/
 .vscode/
 .DS_Store
-src-tauri/icons/
-src-tauri/gen/
-dist/
+/gen/
+
+# Add app icons to gitignore
+/icons/
