@@ -1,8 +1,8 @@
 import React from 'react';
 import { 
-    Layers, Image as ImageIcon, ZoomIn, ZoomOut, Maximize, Maximize2, Minimize,
+    ZoomIn, ZoomOut, Maximize, Maximize2, Minimize,
     FlipHorizontal2, FlipVertical2, Settings, FolderOpen, Download, Save,
-    Minus, Square, X 
+    Image as ImageIcon, Minus, Square, X 
 } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { FileMenu } from '../FileMenu';
@@ -17,7 +17,7 @@ interface EditorHeaderProps {
     loadPsdFromFilePath: (path: string) => void;
     clearRecentFiles: () => void;
     language: 'ja' | 'en';
-    currentFilePath: string | null;   // ← 追加
+    currentFilePath: string | null;
     flipX: boolean;
     setFlipX: React.Dispatch<React.SetStateAction<boolean>>;
     flipY: boolean;
@@ -44,7 +44,7 @@ interface EditorHeaderProps {
 
 export const EditorHeader: React.FC<EditorHeaderProps> = ({
     psd, recentFiles, handleOpenFile, loadPsdFromFilePath, clearRecentFiles, language,
-    currentFilePath,   // ← 追加
+    currentFilePath,
     flipX, setFlipX, flipY, setFlipY, handleZoom, zoomInputActive, zoomInputRef,
     zoomInputValue, setZoomInputValue, handleZoomInputCommit, handleZoomInputFocus,
     zoom, resetZoom, handleToggleFullscreen, isFullscreen, setShowSettings,
@@ -53,26 +53,161 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
     const appWindow = getCurrentWindow();
 
     return (
-        <>
-            <div className="custom-title-bar" data-tauri-drag-region>
-                <div className="title-bar-left">
-                    <div className="title-bar-brand">
-                        <ImageIcon size={14} /><span>psdStudio</span>
-                    </div>
-                    {/* File メニュー */}
-                    <FileMenu
-                        recentFiles={recentFiles}
-                        onOpen={handleOpenFile}
-                        onOpenRecent={loadPsdFromFilePath}
-                        onClearRecent={clearRecentFiles}
-                        language={language}
-                    />
-                    {/* Tools メニュー ← ここに追加 */}
-                    <ToolsMenu
-                        currentFilePath={currentFilePath}
-                        language={language}
-                    />
+        <div className="unified-title-bar" data-tauri-drag-region>
+            {/* ── 左: ブランド + メニュー ── */}
+            <div className="titlebar-left">
+                <div className="titlebar-brand">
+                    <ImageIcon size={13} />
+                    <span>psdStudio</span>
                 </div>
+                <div className="titlebar-divider" />
+                <FileMenu
+                    recentFiles={recentFiles}
+                    onOpen={handleOpenFile}
+                    onOpenRecent={loadPsdFromFilePath}
+                    onClearRecent={clearRecentFiles}
+                    language={language}
+                />
+                <ToolsMenu
+                    currentFilePath={currentFilePath}
+                    language={language}
+                />
+                {!psd && (
+                    <>
+                        <div className="titlebar-divider" />
+                        <button
+                            className="titlebar-ghost-btn"
+                            onClick={handleOpenFile}
+                            aria-label="Open PSD File"
+                        >
+                            <FolderOpen size={13} />
+                            <span>{L.open}</span>
+                        </button>
+                    </>
+                )}
+            </div>
+
+            {/* ── 中央: ズーム / 反転ツール（カプセル） ── */}
+            <div className="titlebar-center">
+                {psd && (
+                    <div className="titlebar-tool-capsule">
+                        <button
+                            onClick={() => setFlipX(v => !v)}
+                            className={`capsule-btn ${flipX ? 'active' : ''}`}
+                            title="Flip Horizontal"
+                            aria-label="Flip Horizontal"
+                        >
+                            <FlipHorizontal2 size={13} />
+                        </button>
+                        <button
+                            onClick={() => setFlipY(v => !v)}
+                            className={`capsule-btn ${flipY ? 'active' : ''}`}
+                            title="Flip Vertical"
+                            aria-label="Flip Vertical"
+                        >
+                            <FlipVertical2 size={13} />
+                        </button>
+
+                        <div className="capsule-sep" />
+
+                        <button
+                            onClick={() => handleZoom(-0.1)}
+                            className="capsule-btn"
+                            title="Zoom Out"
+                            aria-label="Zoom Out"
+                        >
+                            <ZoomOut size={13} />
+                        </button>
+
+                        {zoomInputActive ? (
+                            <input
+                                ref={zoomInputRef}
+                                type="text"
+                                className="capsule-zoom-input"
+                                value={zoomInputValue}
+                                onChange={e => setZoomInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                                onBlur={handleZoomInputCommit}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter') { e.preventDefault(); handleZoomInputCommit(); }
+                                    if (e.key === 'Escape') { setZoomInputActive(false); }
+                                }}
+                                autoFocus
+                            />
+                        ) : (
+                            <span
+                                className="capsule-zoom-value"
+                                onClick={handleZoomInputFocus}
+                                title="クリックして数値入力"
+                                aria-label={`Current zoom: ${Math.round(zoom * 100)}%. Click to enter value.`}
+                                role="button"
+                            >
+                                {Math.round(zoom * 100)}%
+                            </span>
+                        )}
+
+                        <button
+                            onClick={() => handleZoom(0.1)}
+                            className="capsule-btn"
+                            title="Zoom In"
+                            aria-label="Zoom In"
+                        >
+                            <ZoomIn size={13} />
+                        </button>
+                        <button
+                            onClick={resetZoom}
+                            className="capsule-btn"
+                            title="Reset View"
+                            aria-label="Reset View"
+                        >
+                            <Maximize size={13} />
+                        </button>
+
+                        <div className="capsule-sep" />
+
+                        <button
+                            onClick={handleToggleFullscreen}
+                            className={`capsule-btn ${isFullscreen ? 'active' : ''}`}
+                            title="全画面 (F11)"
+                            aria-label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                        >
+                            {isFullscreen ? <Minimize size={13} /> : <Maximize2 size={13} />}
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* ── 右: 設定 / 書き出し / 保存 / ウィンドウ操作 ── */}
+            <div className="titlebar-right">
+                <button
+                    onClick={() => setShowSettings(true)}
+                    title={`${L.settings} (Ctrl+,)`}
+                    className="titlebar-ghost-btn icon-only"
+                    aria-label="Open Settings"
+                >
+                    <Settings size={14} />
+                </button>
+
+                {psd && (
+                    <>
+                        <button
+                            onClick={handleExportPng}
+                            className="titlebar-ghost-btn"
+                            aria-label={exportAriaLabel}
+                        >
+                            <Download size={13} />
+                            <span>{exportButtonLabel}</span>
+                        </button>
+                        <button
+                            onClick={handleSaveFile}
+                            className="titlebar-accent-btn"
+                            aria-label="Save PSD File"
+                        >
+                            <Save size={13} />
+                            <span>{L.savePsd}</span>
+                        </button>
+                    </>
+                )}
+
                 {!isFullscreen && (
                     <div className="window-controls">
                         <button className="control-btn" onClick={() => appWindow.minimize()} aria-label="Minimize">
@@ -87,127 +222,6 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
                     </div>
                 )}
             </div>
-
-            <header className="editor-header">
-                <div className="brand">
-                    <Layers size={20} className="text-accent" />
-                    <h1>{L.workspace}</h1>
-                </div>
-
-                {psd && (
-                    <div className="zoom-controls">
-                        <button 
-                            onClick={() => setFlipX(v => !v)} 
-                            className={flipX ? 'btn-active' : ''} 
-                            title="Flip Horizontal"
-                            aria-label="Flip Horizontal"
-                        >
-                            <FlipHorizontal2 size={16} />
-                        </button>
-                        <button 
-                            onClick={() => setFlipY(v => !v)} 
-                            className={flipY ? 'btn-active' : ''} 
-                            title="Flip Vertical"
-                            aria-label="Flip Vertical"
-                        >
-                            <FlipVertical2 size={16} />
-                        </button>
-                        <div className="zoom-sep" />
-                        <button 
-                            onClick={() => handleZoom(-0.1)} 
-                            title="Zoom Out"
-                            aria-label="Zoom Out"
-                        >
-                            <ZoomOut size={16} />
-                        </button>
-                        {zoomInputActive ? (
-                            <input
-                                ref={zoomInputRef}
-                                type="text"
-                                className="zoom-value zoom-input"
-                                value={zoomInputValue}
-                                onChange={e => setZoomInputValue(e.target.value.replace(/[^0-9]/g, ''))}
-                                onBlur={handleZoomInputCommit}
-                                onKeyDown={e => {
-                                    if (e.key === 'Enter') { e.preventDefault(); handleZoomInputCommit(); }
-                                    if (e.key === 'Escape') { setZoomInputActive(false); }
-                                }}
-                                autoFocus
-                            />
-                        ) : (
-                            <span 
-                                className="zoom-value" 
-                                onClick={handleZoomInputFocus} 
-                                title="クリックして数値入力"
-                                aria-label={`Current zoom: ${Math.round(zoom * 100)}%. Click to enter value.`}
-                                role="button"
-                            >
-                                {Math.round(zoom * 100)}%
-                            </span>
-                        )}
-                        <button 
-                            onClick={() => handleZoom(0.1)} 
-                            title="Zoom In"
-                            aria-label="Zoom In"
-                        >
-                            <ZoomIn size={16} />
-                        </button>
-                        <button 
-                            onClick={resetZoom} 
-                            title="Reset View"
-                            aria-label="Reset View"
-                        >
-                            <Maximize size={16} />
-                        </button>
-                        <div className="zoom-sep" />
-                        <button 
-                            onClick={handleToggleFullscreen} 
-                            className={isFullscreen ? 'btn-active' : ''} 
-                            title="全画面 (F11)"
-                            aria-label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-                        >
-                            {isFullscreen ? <Minimize size={16} /> : <Maximize2 size={16} />}
-                        </button>
-                    </div>
-                )}
-                <div className="btn-group" style={{ marginLeft: psd ? undefined : 'auto' }}>
-                    <button 
-                        onClick={() => setShowSettings(true)} 
-                        title={`${L.settings} (Ctrl+,)`} 
-                        className="btn-settings"
-                        aria-label="Open Settings"
-                    >
-                        <Settings size={16} />
-                    </button>
-                    <button 
-                        onClick={handleOpenFile}
-                        aria-label="Open PSD File"
-                    >
-                        <FolderOpen size={18} />
-                        <span>{L.open}</span>
-                    </button>
-                    {psd && (
-                        <>
-                            <button 
-                                onClick={handleExportPng} 
-                                className="btn-secondary"
-                                aria-label={exportAriaLabel}
-                            >
-                                <Download size={18} />
-                                <span>{exportButtonLabel}</span>
-                            </button>
-                            <button 
-                                onClick={handleSaveFile} 
-                                className="btn-primary"
-                                aria-label="Save PSD File"
-                            >
-                                <Save size={18} />
-                                <span>{L.savePsd}</span>
-                            </button>
-                        </>
-                    )}
-                </div>
-            </header>
-        </>
+        </div>
     );
 };

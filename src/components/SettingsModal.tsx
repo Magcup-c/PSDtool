@@ -422,7 +422,7 @@ export const SettingsModal = ({ settings, onUpdate, onClose, onPreview, onError 
                                 <button className="settings-action-btn" onClick={handleOpenDefaultApps}>
                                     {t.openOSSettings}
                                 </button>
-                                <div style={{ fontSize: '10px', color: 'var(--text-weak)', marginTop: 4, lineHeight: '1.4' }}>
+                                <div style={{ fontSize: '10px', color: 'var(--fg-2)', marginTop: 4, lineHeight: '1.4' }}>
                                     {t.defaultAppNote}
                                 </div>
                             </div>

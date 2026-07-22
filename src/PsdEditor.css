@@ -150,50 +150,211 @@ body {
 }
 
 /* =============================================================================
-   TITLE BAR
+   UNIFIED TITLE BAR (1行統合)
 ============================================================================= */
-.custom-title-bar {
-    height: 32px;
-    min-height: 32px;
+.unified-title-bar {
+    height: 40px;
+    min-height: 40px;
     background: var(--bg-titlebar);
     border-bottom: 1px solid var(--line);
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding-left: 12px;
+    padding: 0 6px 0 12px;
     user-select: none;
+    flex-shrink: 0;
     z-index: 1000;
+    gap: 12px;
+}
+
+/* ── 左 ── */
+.titlebar-left {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    gap: 2px;
     flex-shrink: 0;
 }
 
-.title-bar-brand {
+.titlebar-brand {
     display: flex;
     align-items: center;
     gap: 6px;
+    padding-right: 10px;
+    color: var(--fg);
     pointer-events: none;
 }
 
-.title-bar-brand span {
-    font-family: 'DM Mono', monospace;
-    font-size: 9px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    color: var(--fg-3);
-    text-transform: uppercase;
-}
-
-.title-bar-brand svg {
+.titlebar-brand svg {
     color: var(--accent);
 }
 
-/* Window control buttons */
+.titlebar-brand span {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--fg);
+}
+
+.titlebar-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--fg);
+    opacity: 0.15;
+    flex-shrink: 0;
+    margin: 0 4px;
+}
+
+/* ── 中央 ── */
+.titlebar-center {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+}
+
+.titlebar-tool-capsule {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    background: var(--bg-surface);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.capsule-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--r);
+    color: var(--fg-3);
+    cursor: pointer;
+    transition: background var(--t), color var(--t);
+}
+
+.capsule-btn:hover {
+    background: var(--hover);
+    color: var(--fg-2);
+}
+
+.capsule-btn.active {
+    background: var(--active);
+    color: var(--accent);
+}
+
+.capsule-sep {
+    width: 1px;
+    height: 14px;
+    background: var(--fg);
+    opacity: 0.12;
+    margin: 0 3px;
+    flex-shrink: 0;
+}
+
+.capsule-zoom-value {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--fg-2);
+    min-width: 38px;
+    text-align: center;
+    cursor: pointer;
+    padding: 4px 2px;
+    border-radius: var(--r);
+    transition: color var(--t), background var(--t);
+}
+
+.capsule-zoom-value:hover {
+    color: var(--fg);
+    background: var(--hover);
+}
+
+.capsule-zoom-input {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: var(--r);
+    text-align: center;
+    outline: none;
+    padding: 3px 2px;
+    width: 40px;
+    min-width: 40px;
+    cursor: text;
+}
+
+/* ── 右 ── */
+.titlebar-right {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.titlebar-ghost-btn,
+.titlebar-accent-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: var(--r);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--t), color var(--t);
+}
+
+.titlebar-ghost-btn {
+    background: transparent;
+    border: none;
+    color: var(--fg-3);
+}
+
+.titlebar-ghost-btn:hover {
+    background: var(--hover);
+    color: var(--fg);
+}
+
+.titlebar-ghost-btn.icon-only {
+    width: 28px;
+    min-width: 28px;
+    padding: 0;
+    justify-content: center;
+}
+
+.titlebar-accent-btn {
+    background: var(--accent);
+    border: none;
+    color: var(--accent-fg);
+    font-weight: 500;
+}
+
+.titlebar-accent-btn:hover {
+    opacity: 0.88;
+}
+
+/* ── ウィンドウ操作（サイズだけ新バーに合わせる） ── */
 .window-controls {
     display: flex;
+    align-items: center;
     height: 100%;
+    margin-left: 4px;
 }
 
 .control-btn {
-    width: 42px;
+    width: 40px;
     height: 100%;
     display: flex;
     align-items: center;
@@ -215,135 +376,6 @@ body {
 .control-btn.close:hover {
     background: #c0392b;
     color: #fff;
-}
-
-/* =============================================================================
-   HEADER
-============================================================================= */
-.editor-header {
-    height: 44px;
-    min-height: 44px;
-    padding: 0 12px;
-    background: var(--bg-header);
-    border-bottom: 1px solid var(--line);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-    z-index: 10;
-}
-
-.brand {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.editor-header h1 {
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--fg-2);
-}
-
-/* =============================================================================
-   THEME SWITCHER
-============================================================================= */
-.theme-switcher {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 2px;
-    background: var(--bg-surface);
-    border: 1px solid var(--line);
-    border-radius: var(--r);
-}
-
-.theme-btn {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    cursor: pointer;
-    transition: background var(--t);
-}
-
-.theme-btn:hover {
-    background: var(--hover);
-}
-
-.theme-btn.active {
-    background: var(--hover);
-    border-color: var(--line-mid);
-}
-
-.swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    border: 1px solid rgba(128, 128, 128, 0.2);
-}
-
-.swatch.theme-black {
-    background: #000000;
-}
-
-.swatch.theme-grey {
-    background: #1a1a1a;
-}
-
-.swatch.theme-light {
-    background: #e8e8e8;
-}
-
-.swatch.theme-white {
-    background: #ffffff;
-}
-
-/* =============================================================================
-   ZOOM CONTROLS
-============================================================================= */
-.zoom-controls {
-    display: flex;
-    align-items: center;
-    background: var(--bg-surface);
-    border: 1px solid var(--line);
-    border-radius: var(--r);
-    padding: 2px;
-    margin-left: auto;
-}
-
-.zoom-sep {
-    width: 1px;
-    height: 14px;
-    background: var(--line-mid);
-    margin: 0 2px;
-    flex-shrink: 0;
-}
-
-.zoom-value {
-    font-family: 'DM Mono', monospace;
-    font-size: 11px;
-    font-weight: 400;
-    color: var(--fg-2);
-    min-width: 40px;
-    text-align: center;
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 3px;
-    transition: color var(--t), background var(--t);
-}
-
-.zoom-value:hover {
-    color: var(--fg);
-    background: var(--hover);
 }
 
 /* =============================================================================
@@ -1701,9 +1733,9 @@ canvas {
     background: transparent;
     border: none;
     border-radius: 0;
-    color: var(--fg-2);
+    color: var(--fg-3);
     font-family: 'DM Sans', sans-serif;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 400;
     letter-spacing: 0.03em;
     cursor: default;
