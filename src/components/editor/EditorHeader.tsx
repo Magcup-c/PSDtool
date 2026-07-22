@@ -53,7 +53,12 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
     const appWindow = getCurrentWindow();
 
     return (
-        <div className="unified-title-bar" data-tauri-drag-region>
+        <div
+            className="unified-title-bar"
+            // 最大化時の復元とドラッグ位置の補正はOSに任せる。
+            // 全画面中は移動できないため、ドラッグ領域を無効にする。
+            data-tauri-drag-region={!isFullscreen ? '' : undefined}
+        >
             {/* ── 左: ブランド + メニュー ── */}
             <div className="titlebar-left">
                 <div className="titlebar-brand">

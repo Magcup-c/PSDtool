@@ -155,12 +155,40 @@ export function useZoomPan(
             if (performance.now() < nativeInputUntilRef.current) return;
             const deltaY = normalizeDelta(e, e.deltaY);
             const deltaX = normalizeDelta(e, e.deltaX);
-            const isZoomIntent = e.ctrlKey || e.metaKey || (scrollAction === 'zoom' && !e.shiftKey);
+            const ctrlLike  = e.ctrlKey || e.metaKey;
+            const shiftLike = e.shiftKey;
+
+           // scrollAction === 'zoom' (拡大・縮小モード / 標準):
+            //   ホイール単体      → 拡大縮小 (Zoom)
+            //   Ctrl + ホイール   → 上下移動 (Pan Y)
+            //   Shift + ホイール  → 左右移動 (Pan X)
+            //
+            // scrollAction === 'pan' (上下移動モード / Photoshop風):
+            //   ホイール単体      → 上下移動 (Pan Y)
+            //   Shift + ホイール  → 左右移動 (Pan X)
+            //   Ctrl + ホイール   → 拡大縮小 (Zoom)
+            const isZoomIntent = scrollAction === 'zoom'
+                ? (!ctrlLike && !shiftLike)
+               : ctrlLike;
 
             if (!isZoomIntent) {
                 e.preventDefault();
-                if (deltaX !== 0) el.scrollLeft += deltaX;
-                if (deltaY !== 0) el.scrollTop  += deltaY;
+
+                if (scrollAction === 'zoom') {
+                    if (ctrlLike) {
+                        el.scrollTop += deltaY;
+                    } else if (shiftLike) {
+                        el.scrollLeft += (deltaX !== 0 ? deltaX : deltaY);
+                    }
+                } else {
+                    if (shiftLike) {
+                        el.scrollLeft += (deltaX !== 0 ? deltaX : deltaY);
+                    } else {
+                        if (deltaY !== 0) el.scrollTop  += deltaY;
+                        if (deltaX !== 0) el.scrollLeft += deltaX;
+                    }
+                }
+
                 clampScroll(el, zoomRef.current);
                 return;
             }

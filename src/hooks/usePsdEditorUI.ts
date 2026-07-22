@@ -1,5 +1,6 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { PhysicalSize } from '@tauri-apps/api/dpi';
 import { AppSettings } from './useSettings';
 
 export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) => void) => {
@@ -15,11 +16,37 @@ export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) 
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
     const [themeHover, setThemeHover] = useState(false);
 
+    // Tauri側では初期表示を隠しているため、ReactのDOMが構築された直後に表示する。
+    // Rustの setup() で先に表示すると、フロントエンドの読み込み中の白い画面が見える。
+    useLayoutEffect(() => {
+        appWindow.show().catch(() => {
+            // 表示に失敗しても、アプリの初期化自体は継続する
+        });
+    }, [appWindow]);
+
+    // [FIX] Windows(WebView2)でフルスクリーン切替直後に、新しく見えるようになった
+    // 領域が再描画されず黒や単色のまま残るバグへの対処。
+    // ウィンドウサイズを実際に1pxだけ変化させることで、
+    // WebView2に強制的に再描画(invalidate)させる。
+    const nudgeRepaint = useCallback(async () => {
+        try {
+            const size = await appWindow.innerSize();
+            await appWindow.setSize(new PhysicalSize(size.width + 1, size.height));
+            requestAnimationFrame(() => {
+                appWindow.setSize(new PhysicalSize(size.width, size.height)).catch(() => {});
+            });
+        } catch {
+            // 取得・設定に失敗しても致命的ではないので無視
+        }
+    }, [appWindow]);
+
     const handleToggleFullscreen = useCallback(async () => {
         const next = !isFullscreen;
         await appWindow.setFullscreen(next);
         setIsFullscreen(next);
-    }, [appWindow, isFullscreen]);
+        // フルスクリーン化・解除の直後、少し遅らせてから再描画を強制する
+        setTimeout(() => { nudgeRepaint(); }, 60);
+    }, [appWindow, isFullscreen, nudgeRepaint]);
 
     const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
         setNotification({ message, type }), []);

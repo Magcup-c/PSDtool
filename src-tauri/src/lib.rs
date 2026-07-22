@@ -1,4 +1,4 @@
-use tauri::{Manager, Emitter};
+use tauri::Emitter;
 use tauri_plugin_cli::CliExt;
 
 mod help;
@@ -11,7 +11,7 @@ use help::*;
 
 // ─────────────────────────────────────────────────────────────
 //  Tauri app entry point
-// ─────────────────────────────────────────────────────────────
+// ─────────────────z────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -324,13 +324,6 @@ pub fn run() {
                     }
                 }
                 Err(e) => eprintln!("CLI Error: {}", e),
-            }
-            if let Some(window) = app.get_webview_window("main") {
-                if let Err(e) = window.show() {
-                    eprintln!("Failed to show main window: {}", e);
-                }
-            } else {
-                eprintln!("Main window not found");
             }
             Ok(())
         })
