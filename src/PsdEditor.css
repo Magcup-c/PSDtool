@@ -19,12 +19,12 @@
 
     /* Foreground */
     --fg: #f0f0f0;
-    --fg-2: #888888;
-    --fg-3: #444444;
+    --fg-2: #c2c2c2;   /* was #b5b5b5 -> raised for readability */
+    --fg-3: #8f8f8f;   /* was #6a6a6a -> contrast was 2.9:1 on panels, now ~4.9:1 */
 
     /* Lines */
     --line: #2c2c2c;
-    --line-mid: #333333;
+   --line-mid: #3d3d3d; /* was #333333 */
 
     /* States */
     --hover: rgba(255, 255, 255, 0.04);
@@ -54,8 +54,8 @@
     --active: rgba(167, 139, 250, 0.1);
 
     --fg: #e0e0e0;
-    --fg-2: #666666;
-    --fg-3: #333333;
+    --fg-2: #a0a0a0;   /* was #666666 -> was 3.7:1 on bg, now ~8:1 */
+    --fg-3: #767676;   /* was #333333 -> was 1.3:1 on panels, now ~4.2:1 */
 
     --line: #1a1a1a;
     --line-mid: #222222;
@@ -82,8 +82,8 @@
     --active: rgba(249, 115, 22, 0.08);
 
     --fg: #1a1a1a;
-    --fg-2: #555555;
-    --fg-3: #aaaaaa;
+    --fg-2: #444444;   /* was #555555 -> slightly darker for stronger contrast */
+    --fg-3: #707070;   /* was #aaaaaa -> was 2.3:1 on white surfaces, now ~5:1 */
 
     --line: #d0d0d0;
     --line-mid: #c0c0c0;
@@ -105,8 +105,8 @@
     --active: rgba(59, 130, 246, 0.08);
 
     --fg: #0a0a0a;
-    --fg-2: #555555;
-    --fg-3: #bbbbbb;
+    --fg-2: #444444;   /* was #555555 -> slightly darker for stronger contrast */
+    --fg-3: #707070;   /* was #bbbbbb -> was 1.9:1 on white surfaces, now ~5:1 */
 
     --line: #e8e8e8;
     --line-mid: #dedede;
@@ -524,7 +524,7 @@ button:active {
     color: var(--fg);
     font-family: 'DM Sans', sans-serif;
     font-size: 12px;
-    font-weight: 300;
+    font-weight: 400;
     min-width: 0;
 }
 
@@ -727,7 +727,7 @@ button:active {
     color: var(--fg);
     font-family: 'DM Sans', sans-serif;
     font-size: 12px;
-    font-weight: 300;
+    font-weight: 400;
     padding: 1px 3px;
     border-radius: 3px;
     overflow: hidden;
@@ -855,7 +855,7 @@ button:active {
     height: 100%;
     color: var(--fg-3);
     font-size: 11px;
-    font-weight: 300;
+    font-weight: 400;
 }
 
 /* =============================================================================
@@ -882,7 +882,7 @@ button:active {
     flex: 1;
     min-width: 0;
     font-size: 12px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1001,7 +1001,7 @@ canvas {
 .placeholder p {
     color: var(--fg-3);
     font-size: 12px;
-    font-weight: 300;
+    font-weight: 400;
 }
 
 /* =============================================================================
@@ -1054,7 +1054,7 @@ canvas {
 
 .overlay-text p {
     font-size: 11px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg-3);
 }
 
@@ -1237,7 +1237,7 @@ canvas {
 
 .loading-label {
     font-size: 11px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg-3);
     letter-spacing: 0.04em;
     animation: loadingFadeIn 400ms ease;
@@ -1413,7 +1413,7 @@ canvas {
 
 .settings-field-desc {
     font-size: 10px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg-3);
     margin-bottom: 8px;
     line-height: 1.5;
@@ -1606,7 +1606,7 @@ canvas {
 
 .settings-os-sync-desc {
     font-size: 10px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg-3);
     margin-top: 1px;
 }
@@ -1713,7 +1713,7 @@ canvas {
 
 .file-menu-trigger:hover,
 .file-menu-trigger.active {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--line-mid);
     color: var(--fg);
 }
 
@@ -1747,7 +1747,7 @@ canvas {
     color: var(--fg);
     font-family: 'DM Sans', sans-serif;
     font-size: 12px;
-    font-weight: 300;
+    font-weight: 400;
     text-align: left;
     cursor: default;
     transition: background var(--t), color var(--t);
@@ -1791,7 +1791,7 @@ canvas {
     padding: 5px 8px;
     font-size: 11px;
     color: var(--fg-3);
-    font-weight: 300;
+    font-weight: 400;
 }
 
 /* 履歴クリアボタン */
@@ -1841,7 +1841,7 @@ canvas {
 
 .recent-dir {
     font-size: 10px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg-3);
     max-width: 100%;
     overflow: hidden;
@@ -1903,7 +1903,7 @@ canvas {
     color: var(--fg);
     font-family: 'DM Sans', sans-serif;
     font-size: 12px;
-    font-weight: 300;
+    font-weight: 400;
     text-align: left;
     cursor: default;
     transition: background var(--t), color var(--t);
@@ -1949,7 +1949,7 @@ canvas {
 }
 
 .context-menu-item.active {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--line-mid);
 }
 
 .context-menu-check {
@@ -2708,7 +2708,7 @@ canvas {
 
 .export-fmt-desc {
     font-size: 9px;
-    font-weight: 300;
+    font-weight: 400;
     text-align: center;
     line-height: 1.3;
     color: inherit;
@@ -2795,7 +2795,7 @@ canvas {
     border: 1px solid var(--line);
     border-radius: 4px;
     font-size: 10px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg-2);
     line-height: 1.5;
 }
@@ -2982,7 +2982,7 @@ canvas {
 
 .tool-label-sub {
     font-size: 10px;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--fg-3);
 }
 
