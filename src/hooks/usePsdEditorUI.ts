@@ -31,10 +31,14 @@ export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) 
     const nudgeRepaint = useCallback(async () => {
         try {
             const size = await appWindow.innerSize();
-            await appWindow.setSize(new PhysicalSize(size.width + 1, size.height));
-            requestAnimationFrame(() => {
-                appWindow.setSize(new PhysicalSize(size.width, size.height)).catch(() => {});
-            });
+            const bump = async (dx: number, dy: number) => {
+                await appWindow.setSize(new PhysicalSize(size.width + dx, size.height + dy));
+                await new Promise(r => requestAnimationFrame(r));
+                await new Promise(r => requestAnimationFrame(r));
+                await appWindow.setSize(new PhysicalSize(size.width, size.height));
+            };
+            // 8px → 元に戻す、を1セットとして実行
+            await bump(8, 0);
         } catch {
             // 取得・設定に失敗しても致命的ではないので無視
         }
@@ -44,8 +48,11 @@ export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) 
         const next = !isFullscreen;
         await appWindow.setFullscreen(next);
         setIsFullscreen(next);
-        // フルスクリーン化・解除の直後、少し遅らせてから再描画を強制する
-        setTimeout(() => { nudgeRepaint(); }, 60);
+        // タスクバーの消去/復帰アニメーションのタイミングが環境によってばらつくため、
+        // 複数回タイミングをずらして repaint を強制する
+        setTimeout(() => { nudgeRepaint(); }, 100);
+        setTimeout(() => { nudgeRepaint(); }, 400);
+        setTimeout(() => { nudgeRepaint(); }, 900);
     }, [appWindow, isFullscreen, nudgeRepaint]);
 
         // 追加: 実際のウィンドウ状態を監視して isFullscreen を同期する
@@ -56,18 +63,22 @@ export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) 
             try {
                 const actual = await appWindow.isFullscreen();
                 setIsFullscreen(prev => (prev !== actual ? actual : prev));
-                // ネイティブ操作（タイトルバーのダブルクリック等）による
-                // 最大化/フルスクリーン切り替え時にも再描画を強制する
-                setTimeout(() => { nudgeRepaint(); }, 60);
+                setTimeout(() => { nudgeRepaint(); }, 100);
+                setTimeout(() => { nudgeRepaint(); }, 400);
+                setTimeout(() => { nudgeRepaint(); }, 900);
             } catch {
                 // 取得失敗時は何もしない
             }
         };
 
         const setup = async () => {
-            // resize イベントは最大化/フルスクリーン切り替え時にも発火する
             unlisten = await appWindow.onResized(() => {
                 syncFullscreenState();
+                // [FIX] onResized 発火直後は appWindow.isFullscreen() が
+                // まだ古い値を返すことがあるため、少し遅らせて再チェックする。
+                // これにより「ドラッグでウィンドウ化された直後にコントロールが
+                // 出てこない」問題を解消する。
+                setTimeout(syncFullscreenState, 150);
             });
         };
         setup();
