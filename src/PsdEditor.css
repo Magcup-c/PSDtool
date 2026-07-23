@@ -468,8 +468,8 @@ button:active {
     transition: background 0.2s;
     flex-shrink: 0;
     z-index: 100;
-    margin-left: -4px;
-    margin-right: -4px;
+    margin-left: 0px;
+    margin-right: -8px;
 }
 
 .sidebar-resizer:hover,
@@ -590,6 +590,36 @@ button:active {
     overflow-y: auto;
     overflow-x: hidden;
     padding: 3px 0;
+}
+
+.layer-scroll,
+.favorites-list,
+.tool-log-body,
+.settings-modal-body {
+    scrollbar-width: thin; /* Firefox: ある程度の細さで固定 */
+}
+
+.layer-scroll::-webkit-scrollbar,
+.favorites-list::-webkit-scrollbar,
+.tool-log-body::-webkit-scrollbar,
+.settings-modal-body::-webkit-scrollbar {
+    width: 2px;
+    transition: width 0.15s ease;
+}
+
+.layer-scroll:hover::-webkit-scrollbar,
+.favorites-list:hover::-webkit-scrollbar,
+.tool-log-body:hover::-webkit-scrollbar,
+.settings-modal-body:hover::-webkit-scrollbar {
+    width: 8px;
+}
+
+.layer-scroll::-webkit-scrollbar-thumb,
+.favorites-list::-webkit-scrollbar-thumb,
+.tool-log-body::-webkit-scrollbar-thumb,
+.settings-modal-body::-webkit-scrollbar-thumb {
+    background: var(--line-mid);
+    border-radius: 99px;
 }
 
 .layer-scroll::-webkit-scrollbar {

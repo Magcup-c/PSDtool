@@ -60,8 +60,8 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
             data-tauri-drag-region={!isFullscreen ? '' : undefined}
         >
             {/* ── 左: ブランド + メニュー ── */}
-            <div className="titlebar-left">
-                <div className="titlebar-brand">
+            <div className="titlebar-left" data-tauri-drag-region>
+                <div className="titlebar-brand" data-tauri-drag-region>
                     <ImageIcon size={13} />
                     <span>psdStudio</span>
                 </div>
@@ -93,7 +93,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
             </div>
 
             {/* ── 中央: ズーム / 反転ツール（カプセル） ── */}
-            <div className="titlebar-center">
+            <div className="titlebar-center" data-tauri-drag-region>
                 {psd && (
                     <div className="titlebar-tool-capsule">
                         <button

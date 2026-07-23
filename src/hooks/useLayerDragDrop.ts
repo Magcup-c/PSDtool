@@ -70,25 +70,27 @@ export function useLayerDragDrop(
             if (Math.abs(ev.clientY - dragStateRef.current.startY) > 3) dragStateRef.current.moved = true;
             throttledMove(ev);
         };
-        const onMouseUp = (ev: MouseEvent) => {
-            const state = dragStateRef.current;
-            cleanupDrag();
-            if (!state?.moved) return;
-            const target = findDropTargetFromCache(ev.clientY);
-            if (!target) return;
-            const dragKey   = state.path.join('-');
-            const targetKey = target.path.join('-');
-            if (targetKey === dragKey || targetKey.startsWith(dragKey + '-')) return;
-            if (!psdRef.current) return;
-            const nextPsd = moveLayer(psdRef.current, state.path, target.path, target.position);
-            if (nextPsd) { commitPsd(nextPsd); markDirty(); }
-        };
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp);
-        layerDragCleanupRef.current = () => {
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
-        };
+    const onMouseUp = (ev: MouseEvent) => {
+        const state = dragStateRef.current;
+        cleanupDrag();
+        if (!state?.moved) return;
+        const target = findDropTargetFromCache(ev.clientY);
+        if (!target) return;
+        const dragKey   = state.path.join('-');
+        const targetKey = target.path.join('-');
+        if (targetKey === dragKey || targetKey.startsWith(dragKey + '-')) return;
+        if (!psdRef.current) return;
+
+        // パネルは実データ配列を反転して表示している（画面の上 = 配列の後ろ = 重なりの上）。
+        // そのため画面上での「上に置く(before)」は実データ上では「後ろに挿入(after)」を意味する。
+        const dataPosition: typeof target.position =
+            target.position === 'before' ? 'after' :
+            target.position === 'after'  ? 'before' :
+            'inside';
+
+        const nextPsd = moveLayer(psdRef.current, state.path, target.path, dataPosition);
+        if (nextPsd) { commitPsd(nextPsd); markDirty(); }
+    };
     }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd, markDirty, cleanupDrag]);
 
     return {

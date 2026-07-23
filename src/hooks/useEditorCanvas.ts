@@ -5,6 +5,31 @@ import { PsdLayerNode } from '../types';
 // drawCanvas(USE_PSD_REF) → psdRef.current を使う（従来の引数なし呼び出しと同義）
 // drawCanvas(null)        → 何もしない（将来のキャンバスクリア用途に対応）
 const USE_PSD_REF = Symbol('USE_PSD_REF');
+// ag-psd の blendMode 文字列 → Canvas 2D の globalCompositeOperation
+const BLEND_MODE_MAP: Record<string, GlobalCompositeOperation> = {
+    normal: 'source-over',
+    dissolve: 'source-over', // canvasに厳密な相当がないため通常合成にフォールバック
+    multiply: 'multiply',
+    screen: 'screen',
+    overlay: 'overlay',
+    darken: 'darken',
+    lighten: 'lighten',
+    colorDodge: 'color-dodge',
+    colorBurn: 'color-burn',
+    hardLight: 'hard-light',
+    softLight: 'soft-light',
+    difference: 'difference',
+    exclusion: 'exclusion',
+    hue: 'hue',
+    saturation: 'saturation',
+    color: 'color',
+    luminosity: 'luminosity',
+};
+
+function resolveBlendMode(mode?: string): GlobalCompositeOperation {
+    if (!mode) return 'source-over';
+    return BLEND_MODE_MAP[mode] ?? 'source-over';
+}
 
 export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) => {
     const [flipX, setFlipX] = useState(false);
@@ -95,15 +120,31 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
                     drawLayers(effectiveLayer.children);
                 } else if (effectiveLayer._bitmap) {
                     try {
+                        const op = typeof effectiveLayer.opacity === 'number'
+                            ? Math.max(0, Math.min(1, effectiveLayer.opacity))
+                            : 1;
+                        ctx.globalAlpha = op;
+                        ctx.globalCompositeOperation = resolveBlendMode(effectiveLayer.blendMode);
                         ctx.drawImage(effectiveLayer._bitmap, effectiveLayer.left || 0, effectiveLayer.top || 0);
                     } catch (e) {
                         console.warn('[drawCanvas] Failed to draw layer bitmap:', e);
+                    } finally {
+                        ctx.globalAlpha = 1;
+                        ctx.globalCompositeOperation = 'source-over';
                     }
                 } else if (effectiveLayer.canvas) {
                     try {
+                        const op = typeof effectiveLayer.opacity === 'number'
+                            ? Math.max(0, Math.min(1, effectiveLayer.opacity))
+                            : 1;
+                        ctx.globalAlpha = op;
+                        ctx.globalCompositeOperation = resolveBlendMode(effectiveLayer.blendMode);
                         ctx.drawImage(effectiveLayer.canvas, effectiveLayer.left || 0, effectiveLayer.top || 0);
                     } catch (e) {
                         console.warn('[drawCanvas] Failed to draw layer canvas:', e);
+                    } finally {
+                        ctx.globalAlpha = 1;
+                        ctx.globalCompositeOperation = 'source-over';
                     }
                 }
             }

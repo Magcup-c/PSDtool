@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import { Psd } from 'ag-psd';
+ import { listen } from '@tauri-apps/api/event';
+ import { PsdRoot } from '../types';
 
 const SCROLL_AREA = 16000;
 
-function canvasOrigin(psd: Psd) {
+function canvasOrigin(psd: PsdRoot) {
     return {
         x: SCROLL_AREA / 2 - psd.width  / 2,
         y: SCROLL_AREA / 2 - psd.height / 2,
@@ -12,7 +12,7 @@ function canvasOrigin(psd: Psd) {
 }
 
 export function useZoomPan(
-    psdRef: React.MutableRefObject<Psd | null>,
+    psdRef: React.MutableRefObject<PsdRoot | null>,
     scrollRef: React.RefObject<HTMLDivElement | null>,
     canvasContainerRef: React.RefObject<HTMLDivElement | null>,
     scrollAction: 'zoom' | 'pan' = 'pan'

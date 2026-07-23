@@ -2,7 +2,7 @@
  * src/PsdEditor.tsx
  */
 
-import { useMemo, useCallback, useRef, useState } from 'react';
+import { useMemo, useCallback, useRef, useState, useEffect } from 'react';
 import './PsdEditor.css';
 
 import { usePsdHistory } from './hooks/usePsdHistory';
@@ -38,21 +38,32 @@ import { Toast } from './components/Toast';
 import { TabBar } from './components/TabBar';
 import { ContextMenu } from './components/editor/ContextMenu';
 import { DragOverlay } from './components/editor/DragOverlay';
+import type { PsdRoot } from './types';
 import { formatFavoriteTime } from './utils/editorUtils';
 
 const PsdEditor = () => {
     const { settings, updateSettings } = useSettings();
-    const {
-        psd, setPsd, psdRef, canUndo, canRedo, commitPsd, pushSnapshot, handleUndo, handleRedo,
-        toggleRadioLayer, resetHistory,
-    } = usePsdHistory(null);
 
     const { loadPsd } = usePsdWorker();
     const { recentFiles, addRecentFile, clearRecentFiles } = useRecentFiles(settings.maxRecentFiles ?? 10);
+
+    // ↓ tabManager を先に作る
     const tabManager = useTabManager();
     const { tabs, activeId, updateTab, tabsRef } = tabManager;
     const activeIdRef = useRef(activeId);
     activeIdRef.current = activeId;
+
+    // psdが変わるたびに「同じ呼び出し内」でアクティブタブへ書き戻す。
+    // activeIdRef は毎レンダーで更新され、この関数自体も同期的に呼ばれるため
+    // 高速タブ切替が割り込む余地がない。
+    const handlePsdChange = useCallback((next: PsdRoot | null) => {
+        updateTab(activeIdRef.current, { psd: next });
+    }, [updateTab]);
+
+    const {
+        psd, setPsd, psdRef, canUndo, canRedo, commitPsd, pushSnapshot, handleUndo, handleRedo,
+        toggleRadioLayer, resetHistory,
+    } = usePsdHistory(null, () => tabsRef.current.map(t => t.psd), handlePsdChange);
 
     const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);

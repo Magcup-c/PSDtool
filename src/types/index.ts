@@ -7,6 +7,7 @@ export interface PsdLayerNode {
     name?: string;
     hidden?: boolean;
     opacity?: number;
+    blendMode?: string;
     left?: number;
     top?: number;
     right?: number;

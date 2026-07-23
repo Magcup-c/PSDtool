@@ -60,7 +60,19 @@ export function useTabManager() {
     const activeTab = tabs.find(t => t.id === activeId) ?? tabs[0];
 
     const updateTab = useCallback((id: string, patch: Partial<TabState>) => {
-        setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
+        setTabs(prev => {
+            const idx = prev.findIndex(t => t.id === id);
+            if (idx === -1) return prev;
+            const current = prev[idx];
+            let changed = false;
+            for (const key in patch) {
+                if ((current as any)[key] !== (patch as any)[key]) { changed = true; break; }
+            }
+            if (!changed) return prev;
+            const next = [...prev];
+            next[idx] = { ...current, ...patch };
+            return next;
+        });
     }, []);
 
     const getTab = useCallback((id: string): TabState | null => {

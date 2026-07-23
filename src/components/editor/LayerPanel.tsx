@@ -27,7 +27,7 @@ interface LayerPanelProps {
     handleToggleExpand: (key: string) => void;
     toggleLayerVisibility: (path: number[]) => void;
     renameLayer: (path: number[], name: string) => void;
-    toggleRadioLayer: (path: number[], siblings: PsdLayerNode[]) => void;
+    toggleRadioLayer: (path: number[], siblings?: PsdLayerNode[]) => void;
     handleDeleteLayer: (path: number[]) => void;
     handleLayerDragStart: (e: React.MouseEvent, path: number[]) => void;
     draggingPath: number[] | null;
@@ -356,8 +356,14 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                         searchResults.length > 0 ? (
                             <div className="layer-scroll search-results-list" role="list">
                                 {searchResults.map((result) => (
-                                    <SearchResultRow key={result.path.join('-')} result={result} onToggle={toggleLayerVisibility} />
-                                ))}
+                                    <SearchResultRow
+                                    key={result.path.join('-')}
+                                    result={result}
+                                    onToggle={toggleLayerVisibility}
+                                    onRadioSelect={toggleRadioLayer}
+                                    radioEnabled={radioEnabled}
+                                    lockedEnabled={lockedEnabled}
+                                    />                                ))}
                             </div>
                         ) : (
                             <div className="layer-scroll empty-state"><p>{L.noLayers}</p></div>
