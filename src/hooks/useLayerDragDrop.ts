@@ -91,6 +91,13 @@ export function useLayerDragDrop(
         const nextPsd = moveLayer(psdRef.current, state.path, target.path, dataPosition);
         if (nextPsd) { commitPsd(nextPsd); markDirty(); }
     };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    layerDragCleanupRef.current = () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+    };
     }, [cacheItemRects, findDropTargetFromCache, psdRef, commitPsd, markDirty, cleanupDrag]);
 
     return {

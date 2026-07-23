@@ -2,7 +2,7 @@
  * src/PsdEditor.tsx
  */
 
-import { useMemo, useCallback, useRef, useState, useEffect } from 'react';
+import { useMemo, useCallback, useRef, useState } from 'react';
 import './PsdEditor.scss';
 
 import { usePsdHistory } from './hooks/usePsdHistory';
@@ -191,7 +191,7 @@ const PsdEditor = () => {
             const el = scrollRef.current;
             if (el) {
                 el.scrollLeft = SCROLL_AREA / 2;
-                el.scrollTop  = SCROLL_AREA / 2;
+                el.scrollTop = SCROLL_AREA / 2;
             }
         }
 

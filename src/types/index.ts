@@ -1,3 +1,5 @@
+import type { BlendMode } from 'ag-psd';
+
 export interface DropTargetInfo {
     path: number[];
     position: 'before' | 'after' | 'inside';
@@ -7,7 +9,7 @@ export interface PsdLayerNode {
     name?: string;
     hidden?: boolean;
     opacity?: number;
-    blendMode?: string;
+    blendMode?: BlendMode;
     left?: number;
     top?: number;
     right?: number;
