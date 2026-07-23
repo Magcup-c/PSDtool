@@ -3,7 +3,7 @@
  */
 
 import { useMemo, useCallback, useRef, useState, useEffect } from 'react';
-import './PsdEditor.css';
+import './PsdEditor.scss';
 
 import { usePsdHistory } from './hooks/usePsdHistory';
 import { usePsdWorker } from './hooks/usePsdWorker';

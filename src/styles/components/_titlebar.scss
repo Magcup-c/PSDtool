@@ -1,0 +1,299 @@
+/* =============================================================================
+   UNIFIED TITLE BAR (1行統合)
+============================================================================= */
+.unified-title-bar {
+    height: 40px;
+    min-height: 40px;
+    background: var(--bg-titlebar);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    padding: 0 6px 0 12px;
+    user-select: none;
+    flex-shrink: 0;
+    z-index: 1000;
+    gap: 12px;
+}
+
+/* ── 左 ── */
+.titlebar-left {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.titlebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 10px;
+    color: var(--fg);
+    pointer-events: none;
+}
+
+.titlebar-brand svg {
+    color: var(--accent);
+}
+
+.titlebar-brand span {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--fg);
+}
+
+.titlebar-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--fg);
+    opacity: 0.15;
+    flex-shrink: 0;
+    margin: 0 4px;
+}
+
+/* ── 中央 ── */
+.titlebar-center {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+}
+
+.titlebar-tool-capsule {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    background: var(--bg-surface);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.capsule-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--r);
+    color: var(--fg-3);
+    cursor: pointer;
+    transition: background var(--t), color var(--t);
+}
+
+.capsule-btn:hover {
+    background: var(--hover);
+    color: var(--fg-2);
+}
+
+.capsule-btn.active {
+    background: var(--active);
+    color: var(--accent);
+}
+
+.capsule-sep {
+    width: 1px;
+    height: 14px;
+    background: var(--fg);
+    opacity: 0.12;
+    margin: 0 3px;
+    flex-shrink: 0;
+}
+
+.capsule-zoom-value {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--fg-2);
+    min-width: 38px;
+    text-align: center;
+    cursor: pointer;
+    padding: 4px 2px;
+    border-radius: var(--r);
+    transition: color var(--t), background var(--t);
+}
+
+.capsule-zoom-value:hover {
+    color: var(--fg);
+    background: var(--hover);
+}
+
+.capsule-zoom-input {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: var(--r);
+    text-align: center;
+    outline: none;
+    padding: 3px 2px;
+    width: 40px;
+    min-width: 40px;
+    cursor: text;
+}
+
+/* ── 右 ── */
+.titlebar-right {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.titlebar-ghost-btn,
+.titlebar-accent-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: var(--r);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--t), color var(--t);
+}
+
+.titlebar-ghost-btn {
+    background: transparent;
+    border: none;
+    color: var(--fg-3);
+}
+
+.titlebar-ghost-btn:hover {
+    background: var(--hover);
+    color: var(--fg);
+}
+
+.titlebar-ghost-btn.icon-only {
+    width: 28px;
+    min-width: 28px;
+    padding: 0;
+    justify-content: center;
+}
+
+.titlebar-accent-btn {
+    background: var(--accent);
+    border: none;
+    color: var(--accent-fg);
+    font-weight: 500;
+}
+
+.titlebar-accent-btn:hover {
+    opacity: 0.88;
+}
+
+/* ── ウィンドウ操作（サイズだけ新バーに合わせる） ── */
+.window-controls {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    margin-left: 4px;
+    margin-right: -6px;
+}
+
+.control-btn {
+    width: 46px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    color: var(--fg-3);
+    cursor: pointer;
+    transition: background var(--t), color var(--t);
+}
+
+.control-btn:hover {
+    background: var(--hover);
+    color: var(--fg);
+}
+
+.control-btn.close:hover {
+    background: #c0392b;
+    color: #fff;
+}
+
+/* =============================================================================
+   BUTTONS
+============================================================================= */
+button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    background: transparent;
+    color: var(--fg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+    white-space: nowrap;
+    transition: background var(--t), color var(--t), border-color var(--t);
+}
+
+button:hover {
+    background: var(--hover);
+    color: var(--fg);
+    border-color: var(--line-mid);
+}
+
+button:active {
+    opacity: 0.6;
+}
+
+.btn-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--accent-fg);
+    font-weight: 500;
+}
+
+.btn-primary:hover {
+    opacity: 0.88;
+}
+
+.btn-secondary {
+    background: transparent;
+    border-color: var(--line-mid);
+    color: var(--fg-2);
+}
+
+.btn-secondary:hover {
+    background: var(--hover);
+    color: var(--fg);
+}
+
+.btn-active {
+    background: var(--active);
+    border-color: transparent;
+    color: var(--accent);
+}
+
+.btn-disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+    pointer-events: none;
+}

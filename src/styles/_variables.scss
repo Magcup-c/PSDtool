@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,400&display=swap');
+
+/* =============================================================================
+   DESIGN TOKENS — Default (grey theme)
+   各テーマで上書きする変数をここで定義
+============================================================================= */
+:root {
+    /* Backgrounds */
+    --bg: #1a1a1a;
+    --bg-panel: #161616;
+    --bg-header: #1a1a1a;
+    --bg-titlebar: #131313;
+    --bg-surface: #222222;
+
+    /* Accent */
+    --accent: #e8ff47;
+    --accent-fg: #0e0e0e;
+    --accent-sub: rgba(232, 255, 71, 0.1);
+
+    /* Foreground */
+    --fg: #f0f0f0;
+    --fg-2: #c2c2c2;   /* was #b5b5b5 -> raised for readability */
+    --fg-3: #8f8f8f;   /* was #6a6a6a -> contrast was 2.9:1 on panels, now ~4.9:1 */
+
+    /* Lines */
+    --line: #2c2c2c;
+   --line-mid: #3d3d3d; /* was #333333 */
+
+    /* States */
+    --hover: rgba(255, 255, 255, 0.04);
+    --active: rgba(232, 255, 71, 0.08);
+
+    /* Misc */
+    --r: 4px;
+    --t: 120ms ease;
+}

@@ -1,0 +1,22 @@
+/* =============================================================================
+   PSD EDITOR MAIN SCSS ENTRYPOINT
+   All partials are loaded from src/styles/ using @use
+============================================================================= */
+
+// Core Tokens & Utilities
+@use './styles/variables';
+@use './styles/themes';
+@use './styles/base';
+@use './styles/animations';
+
+// UI Components
+@use './styles/components/titlebar';
+@use './styles/components/layers';
+@use './styles/components/canvas';
+@use './styles/components/tabs';
+@use './styles/components/menus';
+@use './styles/components/settings';
+@use './styles/components/export';
+@use './styles/components/toast';
+@use './styles/components/logs';
+@use './styles/components/misc';

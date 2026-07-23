@@ -1,0 +1,249 @@
+/* =============================================================================
+   SEARCH RESULTS
+============================================================================= */
+.search-results-list {
+    padding: 3px 0;
+}
+
+.search-result-row {
+    cursor: default;
+    gap: 4px;
+}
+
+.search-depth-hint {
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: -0.05em;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.search-result-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.search-highlight {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+/* =============================================================================
+   PREVIEW PANEL
+============================================================================= */
+.preview-panel {
+    flex: 1;
+    background: var(--bg);
+    overflow: scroll;
+    /* ネイティブスクロールに委譲 */
+    position: relative;
+    scrollbar-width: none;
+    /* Firefox */
+    -ms-overflow-style: none;
+    /* IE / Edge */
+    overscroll-behavior: none;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+    touch-action: none;
+}
+
+.preview-panel::-webkit-scrollbar {
+    display: none;
+    /* Chrome / Safari / Tauri WebView */
+}
+
+.preview-panel:active {
+    cursor: grabbing;
+}
+
+/* ドットグリッド背景はスクロール追従のため ::after ではなく inner に描画 */
+.preview-scroll-inner {
+    background-image: radial-gradient(circle, var(--line) 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+/* タブ切り替え時の軽いフェード（レイアウト同期後の視覚的なつながり用） */
+@keyframes preview-tab-fade-in {
+    from {
+        opacity: 0.88;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.preview-tab-fade-in {
+    animation: preview-tab-fade-in 140ms ease-out;
+}
+
+/* Canvas wrapper */
+.canvas-container {
+    outline: 1px solid var(--line-mid);
+    border-radius: 2px;
+    position: relative;
+    flex-shrink: 0;
+    overflow: hidden;
+    z-index: 1;
+    /* チェッカーボード（ライトテーマ用） */
+    background-color: #fff;
+    background-image:
+        linear-gradient(45deg, #eee 25%, transparent 25%),
+        linear-gradient(-45deg, #eee 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #eee 75%),
+        linear-gradient(-45deg, transparent 75%, #eee 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.theme-black .canvas-container,
+.theme-grey .canvas-container {
+    background-color: #1a1a1a;
+    background-image:
+        linear-gradient(45deg, #222 25%, transparent 25%),
+        linear-gradient(-45deg, #222 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #222 75%),
+        linear-gradient(-45deg, transparent 75%, #222 75%);
+}
+
+canvas {
+    display: block;
+}
+
+/* Placeholder (no file loaded) */
+.placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.placeholder-icon {
+    width: 40px;
+    height: 40px;
+    color: var(--fg-3);
+    opacity: 0.4;
+}
+
+.placeholder p {
+    color: var(--fg-3);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+/* =============================================================================
+   DRAG & DROP OVERLAY
+============================================================================= */
+.drag-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.drag-message {
+    background: var(--bg-surface);
+    border: 1px dashed var(--line-mid);
+    border-radius: var(--r);
+    padding: 40px 56px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    animation: dragPulse 2s ease-in-out infinite;
+}
+
+.overlay-icon-ring {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    border: 1px solid var(--line-mid);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--fg-2);
+}
+
+.overlay-text {
+    text-align: center;
+}
+
+.overlay-text h3 {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--fg);
+    margin-bottom: 4px;
+}
+
+.overlay-text p {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--fg-3);
+}
+
+/* =============================================================================
+   TOAST NOTIFICATION
+============================================================================= */
+.toast-notification {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--line-mid);
+    padding: 8px 14px;
+    border-radius: var(--r);
+    z-index: 2000;
+    white-space: nowrap;
+    animation: toastIn 0.2s ease;
+}
+
+.toast-notification.success {
+    border-left: 2px solid var(--accent);
+}
+
+.toast-notification.error {
+    border-left: 2px solid #e05555;
+}
+
+.toast-notification span {
+    font-size: 12px;
+    color: var(--fg);
+}
+
+.toast-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: var(--fg-3);
+    cursor: pointer;
+}
+
+.toast-close:hover {
+    color: var(--fg);
+    background: var(--hover);
+}

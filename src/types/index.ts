@@ -50,6 +50,7 @@ export interface LocaleStrings {
     fixed: string;
     flip: string;
     dropPsd: string;
+    noFile: string;
     noLayers: string;
     loading: string;
     dragDrop: string;
