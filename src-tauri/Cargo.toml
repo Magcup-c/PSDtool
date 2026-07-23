@@ -1,8 +1,8 @@
 [package]
-name = "psd-tool"
+name = "psd-studio"
 version = "0.1.0"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["Magcup-c <https://github.com/Magcup-c>"]
 edition = "2021"
 
 [lib]

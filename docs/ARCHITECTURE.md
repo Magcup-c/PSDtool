@@ -114,7 +114,6 @@ npm run tauri build
 | ショートカット | 動作 |
 |---|---|
 | `Ctrl + O` | ファイルを開く |
-| `Ctrl + S` | PSDを保存 |
 | `Ctrl + Z` | 元に戻す |
 | `Ctrl + Y` / `Ctrl + Shift + Z` | やり直し |
 | `Ctrl + C` | キャンバスをクリップボードにコピー |

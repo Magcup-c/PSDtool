@@ -1,8 +1,9 @@
 {
-  "name": "psd-tool",
+  "name": "psdstudio",
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "author": "Magcup-c <https://github.com/Magcup-c>",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
