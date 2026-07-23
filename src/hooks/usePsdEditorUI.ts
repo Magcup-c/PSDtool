@@ -48,6 +48,33 @@ export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) 
         setTimeout(() => { nudgeRepaint(); }, 60);
     }, [appWindow, isFullscreen, nudgeRepaint]);
 
+        // 追加: 実際のウィンドウ状態を監視して isFullscreen を同期する
+    useEffect(() => {
+        let unlisten: (() => void) | null = null;
+
+        const syncFullscreenState = async () => {
+            try {
+                const actual = await appWindow.isFullscreen();
+                setIsFullscreen(prev => (prev !== actual ? actual : prev));
+                // ネイティブ操作（タイトルバーのダブルクリック等）による
+                // 最大化/フルスクリーン切り替え時にも再描画を強制する
+                setTimeout(() => { nudgeRepaint(); }, 60);
+            } catch {
+                // 取得失敗時は何もしない
+            }
+        };
+
+        const setup = async () => {
+            // resize イベントは最大化/フルスクリーン切り替え時にも発火する
+            unlisten = await appWindow.onResized(() => {
+                syncFullscreenState();
+            });
+        };
+        setup();
+
+        return () => { unlisten?.(); };
+    }, [appWindow, nudgeRepaint]);
+
     const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
         setNotification({ message, type }), []);
 
