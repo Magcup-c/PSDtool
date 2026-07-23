@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window';
 import { PhysicalSize } from '@tauri-apps/api/dpi';
 import { AppSettings } from './useSettings';
 
@@ -11,23 +11,19 @@ export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) 
     const [isFullscreen, setIsFullscreen] = useState(false);
     const appWindow = getCurrentWindow();
 
+    // F11で全画面にする直前に最大化状態だったかを覚えておく
+    // （全画面終了時に元の最大化状態へ復元するため）
+    const wasMaximizedBeforeFullscreenRef = useRef(false);
+
     const [showSettings, setShowSettings] = useState(false);
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
     const [themeHover, setThemeHover] = useState(false);
 
-    // Tauri側では初期表示を隠しているため、ReactのDOMが構築された直後に表示する。
-    // Rustの setup() で先に表示すると、フロントエンドの読み込み中の白い画面が見える。
     useLayoutEffect(() => {
-        appWindow.show().catch(() => {
-            // 表示に失敗しても、アプリの初期化自体は継続する
-        });
+        appWindow.show().catch(() => {});
     }, [appWindow]);
 
-    // [FIX] Windows(WebView2)でフルスクリーン切替直後に、新しく見えるようになった
-    // 領域が再描画されず黒や単色のまま残るバグへの対処。
-    // ウィンドウサイズを実際に1pxだけ変化させることで、
-    // WebView2に強制的に再描画(invalidate)させる。
     const nudgeRepaint = useCallback(async () => {
         try {
             const size = await appWindow.innerSize();
@@ -37,54 +33,102 @@ export const usePsdEditorUI = (updateSettings: (settings: Partial<AppSettings>) 
                 await new Promise(r => requestAnimationFrame(r));
                 await appWindow.setSize(new PhysicalSize(size.width, size.height));
             };
-            // 8px → 元に戻す、を1セットとして実行
             await bump(8, 0);
         } catch {
-            // 取得・設定に失敗しても致命的ではないので無視
+            // ignore
         }
     }, [appWindow]);
 
+    // [FIX] 最大化 → フルスクリーン時に、元タスクバー領域が
+    // 再描画されず黒/水色/白のまま残る WebView2 の不具合を回避する。
+    // 一度ウィンドウを通常状態に戻してからフルスクリーンにする。
     const handleToggleFullscreen = useCallback(async () => {
         const next = !isFullscreen;
+
+        if (next) {
+            try {
+                const wasMaximized = await appWindow.isMaximized();
+                wasMaximizedBeforeFullscreenRef.current = wasMaximized;
+                if (wasMaximized) {
+                    await appWindow.unmaximize();
+                    await new Promise(r => requestAnimationFrame(r));
+                    await new Promise(r => requestAnimationFrame(r));
+                }
+            } catch {
+                // 取得・復元に失敗しても致命的ではないため続行
+            }
+        }
+
         await appWindow.setFullscreen(next);
         setIsFullscreen(next);
-        // タスクバーの消去/復帰アニメーションのタイミングが環境によってばらつくため、
-        // 複数回タイミングをずらして repaint を強制する
+
+        if (!next && wasMaximizedBeforeFullscreenRef.current) {
+            // 全画面終了時、元が最大化だったなら最大化状態に戻す
+            try { await appWindow.maximize(); } catch { /* ignore */ }
+            wasMaximizedBeforeFullscreenRef.current = false;
+        }
+
         setTimeout(() => { nudgeRepaint(); }, 100);
         setTimeout(() => { nudgeRepaint(); }, 400);
         setTimeout(() => { nudgeRepaint(); }, 900);
     }, [appWindow, isFullscreen, nudgeRepaint]);
 
-        // 追加: 実際のウィンドウ状態を監視して isFullscreen を同期する
+    // [FIX] タイトルバーのドラッグ領域をダブルクリック/ドラッグして
+    // ネイティブに「ウィンドウ化」された場合、Tauri内部の isFullscreen
+    // フラグが true のまま取り残されることがある。
+    // ウィンドウの実サイズとモニターサイズを比較する「ジオメトリ判定」を
+    // 併用し、食い違っていれば setFullscreen(false) を明示的に呼んで
+    // 内部フラグを実状態に強制同期する。
+    const detectFullscreenByGeometry = useCallback(async (): Promise<boolean | null> => {
+        try {
+            const [size, monitor] = await Promise.all([
+                appWindow.outerSize(),
+                currentMonitor(),   // ← appWindow.currentMonitor() ではなく単体関数として呼ぶ
+            ]);
+            if (!monitor) return null;
+            return size.width >= monitor.size.width && size.height >= monitor.size.height;
+        } catch {
+            return null;
+        }
+    }, [appWindow]);
+
     useEffect(() => {
         let unlisten: (() => void) | null = null;
 
         const syncFullscreenState = async () => {
             try {
-                const actual = await appWindow.isFullscreen();
+                const [tauriFlag, geometryFullscreen] = await Promise.all([
+                    appWindow.isFullscreen(),
+                    detectFullscreenByGeometry(),
+                ]);
+                const actual = geometryFullscreen ?? tauriFlag;
+
+                // Tauri内部フラグと実ジオメトリが食い違う場合は強制同期
+                if (tauriFlag && !actual) {
+                    await appWindow.setFullscreen(false);
+                    wasMaximizedBeforeFullscreenRef.current = false;
+                }
+
                 setIsFullscreen(prev => (prev !== actual ? actual : prev));
                 setTimeout(() => { nudgeRepaint(); }, 100);
                 setTimeout(() => { nudgeRepaint(); }, 400);
                 setTimeout(() => { nudgeRepaint(); }, 900);
             } catch {
-                // 取得失敗時は何もしない
+                // ignore
             }
         };
 
         const setup = async () => {
             unlisten = await appWindow.onResized(() => {
                 syncFullscreenState();
-                // [FIX] onResized 発火直後は appWindow.isFullscreen() が
-                // まだ古い値を返すことがあるため、少し遅らせて再チェックする。
-                // これにより「ドラッグでウィンドウ化された直後にコントロールが
-                // 出てこない」問題を解消する。
                 setTimeout(syncFullscreenState, 150);
             });
         };
         setup();
 
         return () => { unlisten?.(); };
-    }, [appWindow, nudgeRepaint]);
+    }, [appWindow, nudgeRepaint, detectFullscreenByGeometry]);
+
 
     const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
         setNotification({ message, type }), []);

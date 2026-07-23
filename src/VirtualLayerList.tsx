@@ -269,7 +269,7 @@ const LayerRow = memo(({
                         {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </button>
                 ) : (
-                    <span style={{ width: 24, flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ width: 18, flexShrink: 0, display: 'inline-block' }} />
                 )}
 
                 {!isLocked ? (

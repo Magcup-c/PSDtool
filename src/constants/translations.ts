@@ -13,6 +13,7 @@ export const getTranslations = (lang: Language) => ({
     searchPlaceholder: lang === 'ja' ? 'レイヤーを検索' : 'Search layers...',
     radio: 'Radio', fixed: 'Fixed', flip: 'Flip',
     dropPsd: lang === 'ja' ? 'PSDをドロップ' : 'Drop a PSD file here',
+    noFile: lang === 'ja' ? 'レイヤーがありません' : 'No layers',
     noLayers: lang === 'ja' ? '見つかりません' : 'No layers found',
     loading: lang === 'ja' ? '読み込み中…' : 'Analyzing workspace…',
     dragDrop: lang === 'ja' ? 'PSDファイルをドロップ' : 'Drop PSD file here',

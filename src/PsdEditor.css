@@ -351,10 +351,11 @@ body {
     align-items: center;
     height: 100%;
     margin-left: 4px;
+    margin-right: -6px;
 }
 
 .control-btn {
-    width: 40px;
+    width: 46px;
     height: 100%;
     display: flex;
     align-items: center;
@@ -498,8 +499,8 @@ button:active {
 /* Mode toggles (Radio / Fixed / Flip) */
 .layer-mode-bar {
     display: flex;
-    gap: 3px;
-    padding: 5px 8px;
+    gap: 4px;
+    padding: 6px 8px;
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
 }
@@ -509,27 +510,30 @@ button:active {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    padding: 3px 5px;
+    gap: 4px;
+    padding: 4px 6px;
     font-size: 10px;
     font-weight: 500;
     letter-spacing: 0.05em;
-    border-radius: 3px;
-    border: 1px solid transparent;
+    border-radius: var(--r);
+    border: 1px solid var(--line);
     background: transparent;
     color: var(--fg-3);
     cursor: pointer;
-    transition: background var(--t), color var(--t);
+    transition: all var(--t);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
 .mode-toggle:hover {
     background: var(--hover);
     color: var(--fg-2);
+    border-color: var(--line-mid);
 }
 
 .mode-toggle.active {
-    background: var(--active);
+    background: var(--accent-sub);
     color: var(--accent);
+    border-color: var(--accent);
 }
 
 /* Search bar */

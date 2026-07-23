@@ -325,7 +325,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                 </div>
             )}
 
-            {!searchResults && (
+            {psd && !searchResults && (
                 <div className="layer-mode-bar">
                     <button className={`mode-toggle ${radioEnabled ? 'active' : ''}`} onClick={() => setRadioEnabled(v => !v)} title="Radio group mode" aria-label="Toggle radio group mode">
                         <Asterisk size={13} /><span>{L.radio}</span>
@@ -386,7 +386,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                         />
                     )
                 ) : (
-                    <div className="layer-scroll empty-state"><p>{L.dropPsd}</p></div>
+                    <div className="layer-scroll empty-state"><p>{L.noFile}</p></div>
                 )}
             </div>
         </div>
