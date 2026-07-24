@@ -12,6 +12,3 @@ dist/
 .vscode/
 .DS_Store
 /gen/
-
-# Add app icons to gitignore
-/icons/
