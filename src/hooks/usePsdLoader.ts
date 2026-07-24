@@ -93,8 +93,7 @@ export const usePsdLoader = ({
             // ★ 実データを持つはずのレイヤーが1つもビットマップ化できなかった場合は
             //    ファイル破損等の可能性が高いため、読み込み失敗として扱う。
             //    既存のcatchブロックに任せることで、タブを閉じる/空に戻す処理も統一される。
-            const diag = (result as any).diag as
-                { totalLeaf: number; eligible: number; rendered: number; failed: number } | undefined;
+            const diag = result.diag; // any キャスト不要に
             if (diag && diag.totalLeaf > 0 && diag.rendered === 0) {
                 throw new Error(L.layerRenderFailed as string);
             }

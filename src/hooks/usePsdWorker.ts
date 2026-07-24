@@ -11,6 +11,7 @@ import PsdWorker from '../workers/psdWorker?worker';
 export interface PsdLoadResult {
     psd: Psd;
     layers: LayerThumbEntry[];
+    diag?: { totalLeaf: number; eligible: number; rendered: number; failed: number }; // ★ 追加
 }
 
 interface PendingEntry {
@@ -27,7 +28,7 @@ export function usePsdWorker() {
         const worker = new PsdWorker();
 
         worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
-            const { id, psd, layers, error } = event.data;
+            const { id, psd, layers, error, diag } = event.data; // ★ diag を受け取る
             const pending = pendingRef.current.get(id);
             if (!pending) return;
             pendingRef.current.delete(id);
@@ -36,7 +37,7 @@ export function usePsdWorker() {
                 pending.reject(new Error(error));
                 return;
             }
-            pending.resolve({ psd, layers });
+            pending.resolve({ psd, layers, diag }); // ★ diag を渡す
         };
 
         worker.onerror = (event: ErrorEvent) => {
