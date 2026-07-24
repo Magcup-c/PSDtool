@@ -26,6 +26,7 @@ export interface WorkerResponse {
     psd: Psd;
     layers: LayerThumbEntry[];
     error?: string;
+    failedLayerCount?: number;
 }
 
 function normalizeRadioGroups(layers: PsdLayerNode[]): PsdLayerNode[] {
@@ -85,9 +86,9 @@ async function canvasToBitmaps(
 async function collectLayerBitmaps(
     layers: PsdLayerNode[],
     parentPath: number[] = [],
-): Promise<LayerThumbEntry[]> {
+): Promise<{ entries: LayerThumbEntry[]; failed: number }> {
     const directTasks: Promise<LayerThumbEntry | null>[] = [];
-    const childTasks: Promise<LayerThumbEntry[]>[] = [];
+    const childTasks: Promise<{ entries: LayerThumbEntry[]; failed: number }>[] = [];
 
     layers.forEach((layer, i) => {
         const key = [...parentPath, i].join('-');
@@ -98,7 +99,11 @@ async function collectLayerBitmaps(
             directTasks.push(
                 canvasToBitmaps(canvas)
                     .then(({ bitmap }) => ({ key, bitmap, left, top }))
-                    .catch(() => null),
+                    .catch((err) => {
+                        // ★ ここで握りつぶさずログに残す
+                        console.warn(`[psdWorker] bitmap生成失敗 layer=${key}:`, err);
+                        return null;
+                    }),
             );
         }
         if (layer.children?.length) {
@@ -111,10 +116,14 @@ async function collectLayerBitmaps(
         Promise.all(childTasks),
     ]);
 
-    return [
-        ...directs.filter((e): e is LayerThumbEntry => e !== null),
-        ...children.flat(),
-    ];
+    const failedHere = directs.filter(e => e === null).length;
+    return {
+        entries: [
+            ...directs.filter((e): e is LayerThumbEntry => e !== null),
+            ...children.flatMap(c => c.entries),
+        ],
+        failed: failedHere + children.reduce((acc, c) => acc + c.failed, 0),
+    };
 }
 
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
@@ -131,7 +140,9 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         }
 
         // canvas が生きている間に bitmap 生成（stripCanvas より前）
-        const layers = psd.children ? await collectLayerBitmaps(psd.children) : [];
+        const { entries: layers, failed } = psd.children
+            ? await collectLayerBitmaps(psd.children)
+            : { entries: [], failed: 0 };
 
         // OffscreenCanvas を除去してから postMessage
         if (psd.children) stripCanvas(psd.children);
@@ -140,7 +151,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
         const transferables: Transferable[] = layers.map((e) => e.bitmap);
 
-        const response: WorkerResponse = { id, psd, layers };
+        const response: WorkerResponse = { id, psd, layers, failedLayerCount: failed };
         (self as any).postMessage(response, transferables);
     } catch (err) {
         const response: WorkerResponse = {
