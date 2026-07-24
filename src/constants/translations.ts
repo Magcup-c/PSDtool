@@ -70,7 +70,8 @@ export const getTranslations = (lang: Language) => ({
     themeBlack: 'Black',
     themeGrey: 'Grey',
     themeLight: 'Light',
-    themeWhite: 'White',
+    layerRenderFailed: lang === 'ja'
+        ? 'レイヤー画像の生成に失敗しました（対応していない色モード・ビット深度・レイヤー種別の可能性があります）'
+        : 'Failed to render layer images (unsupported color mode, bit depth, or layer type?)',
 });
-
 export type Translations = ReturnType<typeof getTranslations>;

@@ -26,7 +26,7 @@ export interface WorkerResponse {
     psd: Psd;
     layers: LayerThumbEntry[];
     error?: string;
-    failedLayerCount?: number;
+    diag?: { totalLeaf: number; eligible: number; rendered: number; failed: number };
 }
 
 function normalizeRadioGroups(layers: PsdLayerNode[]): PsdLayerNode[] {
@@ -86,25 +86,37 @@ async function canvasToBitmaps(
 async function collectLayerBitmaps(
     layers: PsdLayerNode[],
     parentPath: number[] = [],
-): Promise<{ entries: LayerThumbEntry[]; failed: number }> {
+): Promise<{ entries: LayerThumbEntry[]; totalLeaf: number; eligible: number; failed: number }> {
     const directTasks: Promise<LayerThumbEntry | null>[] = [];
-    const childTasks: Promise<{ entries: LayerThumbEntry[]; failed: number }>[] = [];
+    const childTasks: Promise<{ entries: LayerThumbEntry[]; totalLeaf: number; eligible: number; failed: number }>[] = [];
+    let totalLeafHere = 0;
+    let eligibleHere = 0;
+    let failedHere = 0;
 
     layers.forEach((layer, i) => {
         const key = [...parentPath, i].join('-');
-        if (layer.canvas && !layer.children?.length) {
-            const canvas = layer.canvas as OffscreenCanvas;
-            const left = layer.left ?? 0;
-            const top  = layer.top  ?? 0;
-            directTasks.push(
-                canvasToBitmaps(canvas)
-                    .then(({ bitmap }) => ({ key, bitmap, left, top }))
-                    .catch((err) => {
-                        // ★ ここで握りつぶさずログに残す
-                        console.warn(`[psdWorker] bitmap生成失敗 layer=${key}:`, err);
-                        return null;
-                    }),
-            );
+        const isLeaf = !layer.children?.length;
+
+        if (isLeaf) {
+            totalLeafHere++;
+            if (layer.canvas) {
+                eligibleHere++;
+                const canvas = layer.canvas as OffscreenCanvas;
+                const left = layer.left ?? 0;
+                const top  = layer.top  ?? 0;
+                directTasks.push(
+                    canvasToBitmaps(canvas)
+                        .then(({ bitmap }) => ({ key, bitmap, left, top }))
+                        .catch((err) => {
+                            failedHere++;
+                            // 実変換エラーは個別に見えた方が調査しやすいので残す
+                            console.warn(`[psdWorker] bitmap変換失敗 layer="${layer.name}" key=${key}:`, err);
+                            return null;
+                        }),
+                );
+            }
+            // canvas が無いケース（非表示レイヤー等でデータ未保存）は
+            // 個別ログを出さず件数だけ集計する。単発では正常な現象のため。
         }
         if (layer.children?.length) {
             childTasks.push(collectLayerBitmaps(layer.children, [...parentPath, i]));
@@ -116,13 +128,14 @@ async function collectLayerBitmaps(
         Promise.all(childTasks),
     ]);
 
-    const failedHere = directs.filter(e => e === null).length;
     return {
         entries: [
             ...directs.filter((e): e is LayerThumbEntry => e !== null),
             ...children.flatMap(c => c.entries),
         ],
-        failed: failedHere + children.reduce((acc, c) => acc + c.failed, 0),
+        totalLeaf: totalLeafHere + children.reduce((acc, c) => acc + c.totalLeaf, 0),
+        eligible:  eligibleHere  + children.reduce((acc, c) => acc + c.eligible, 0),
+        failed:    failedHere    + children.reduce((acc, c) => acc + c.failed, 0),
     };
 }
 
@@ -139,19 +152,23 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
             psd.children = normalizeRadioGroups(psd.children);
         }
 
-        // canvas が生きている間に bitmap 生成（stripCanvas より前）
-        const { entries: layers, failed } = psd.children
+        const { entries: layers, totalLeaf, eligible, failed } = psd.children
             ? await collectLayerBitmaps(psd.children)
-            : { entries: [], failed: 0 };
+            : { entries: [], totalLeaf: 0, eligible: 0, failed: 0 };
 
-        // OffscreenCanvas を除去してから postMessage
+        // 要約は1行だけ。個別レイヤーのログは出さない。
+        console.info(`[psdWorker] レイヤー解析: 総数=${totalLeaf} canvas有=${eligible} 変換成功=${layers.length} 変換失敗=${failed}`);
+
         if (psd.children) stripCanvas(psd.children);
         if ('canvas' in (psd as any)) delete (psd as any).canvas;
         stripOffscreenCanvasDeep(psd);
 
         const transferables: Transferable[] = layers.map((e) => e.bitmap);
 
-        const response: WorkerResponse = { id, psd, layers, failedLayerCount: failed };
+        const response: WorkerResponse = {
+            id, psd, layers,
+            diag: { totalLeaf, eligible, rendered: layers.length, failed },
+        };
         (self as any).postMessage(response, transferables);
     } catch (err) {
         const response: WorkerResponse = {
