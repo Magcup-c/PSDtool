@@ -3,8 +3,8 @@
 PSD ファイルの閲覧・編集に特化したデスクトップアプリケーション。
 Tauri (Rust) + React + TypeScript 製。
 
-!\[Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
-!\[License](https://img.shields.io/badge/license-MIT-green.svg)
+![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## 機能一覧
 
@@ -136,6 +136,14 @@ psdStudio watch ./src -o ./dist -f png --debounce 300
 |`レイヤー名:flipx`|水平フリップ時にこのバリアントを表示|
 |`レイヤー名:flipy`|垂直フリップ時に表示|
 |`レイヤー名:flipxy`|両方フリップ時に表示|
+
+## セキュリティと権限について
+
+本アプリでは、ユーザーがローカル環境内のさまざまな場所（D/E/G などの追加ドライブや深層フォルダ）に配置された PSD ファイルをシームレスに開いて作業できるよう、ファイルシステムへのアクセス権限（Capabilities）を広めに設定しています。
+
+* **アクセス範囲**: ローカルのドライブ全域およびホームディレクトリ
+* **設定ファイル**: `src-tauri/capabilities/default.json`
+* **理由**: 任意のパスにある PSD ファイルの直接読み込み・保存および各種バッチ処理をスムーズに行うための仕様です。
 
 ## アーキテクチャ
 
