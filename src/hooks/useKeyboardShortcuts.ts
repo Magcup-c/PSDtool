@@ -23,7 +23,16 @@ export function useKeyboardShortcuts({
     tabs, activeId, handleActivateTab, handleCloseTab, handleNewTab
 }: KeyboardShortcutHandlers) {
     useEffect(() => {
+        const isModalOpen = () => {
+            if (typeof document === 'undefined') return false;
+            return Boolean(document.querySelector(
+                '[role="dialog"], [aria-modal="true"], .settings-overlay, .confirm-overlay-v2, .favorite-modal-overlay, .tool-modal-overlay'
+            ));
+        };
+
         const onKeyDown = (e: KeyboardEvent) => {
+            if (isModalOpen()) return;
+
             const tag = (e.target as HTMLElement).tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 

@@ -40,6 +40,16 @@ export const getTranslations = (lang: Language) => ({
     openFailed: lang === 'ja' ? 'ファイルを開けませんでした' : 'Failed to open file',
     saveSuccess: lang === 'ja' ? '保存しました' : 'File saved successfully!',
     saveFailed: lang === 'ja' ? '保存に失敗しました' : 'Failed to save file',
+    unsavedChangesTitle: lang === 'ja' ? '未保存の変更' : 'Unsaved Changes',
+    unsavedChangesMessage: lang === 'ja'
+        ? '未保存の変更があります。破棄して続行しますか？'
+        : 'You have unsaved changes. Discard them and continue?',
+    discardChanges: lang === 'ja' ? '破棄して続行' : 'Discard & Continue',
+    quitTitle: lang === 'ja' ? 'アプリを終了' : 'Quit Application',
+    quitMessage: lang === 'ja'
+        ? '未保存の変更があります。保存せずに終了しますか？'
+        : 'You have unsaved changes. Are you sure you want to quit without saving?',
+    quitDiscard: lang === 'ja' ? '保存せずに終了' : 'Quit Without Saving',
     exportSuccess: lang === 'ja' ? 'エクスポートが完了しました' : 'Exported successfully!',
     exportFailed: lang === 'ja' ? 'エクスポートに失敗しました' : 'Failed to export',
     newTab: lang === 'ja' ? '新しいタブ' : 'New tab',

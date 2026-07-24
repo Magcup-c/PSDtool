@@ -2,7 +2,7 @@
  * src/PsdEditor.tsx
  */
 
-import { useMemo, useCallback, useRef, useState } from 'react';
+import { useMemo, useCallback, useRef, useState, useEffect } from 'react';
 import './PsdEditor.scss';
 
 import { usePsdHistory } from './hooks/usePsdHistory';
@@ -36,6 +36,7 @@ import { FavoriteModal } from './components/editor/FavoriteModal';
 import { SettingsModal } from './components/SettingsModal';
 import { Toast } from './components/Toast';
 import { TabBar } from './components/TabBar';
+import { ConfirmModal } from './components/ConfirmModal';
 import { ContextMenu } from './components/editor/ContextMenu';
 import { DragOverlay } from './components/editor/DragOverlay';
 import type { PsdRoot } from './types';
@@ -68,6 +69,7 @@ const PsdEditor = () => {
     const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
+    const [confirmState, setConfirmState] = useState<{ open: boolean; title: string; message: string; confirmLabel: string; cancelLabel: string; variant?: 'danger' | 'warning'; onConfirm: () => void; onCancel: () => void } | null>(null);
     const favoriteInputRef = useRef<HTMLInputElement>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -136,9 +138,46 @@ const PsdEditor = () => {
         renameSessionRef, renameTimerRef, psd, drawCanvas,
     });
 
-    const { handleOpenFile, handleCopyCanvas, handleSaveFile } = useFileActions({
+    const { handleOpenFile: handleOpenFileBase, handleCopyCanvas, handleSaveFile } = useFileActions({
         psd, canvasRef, openPsdUnified, showToast, L, activeId, updateTab, language: settings.language
     });
+
+    const confirmUnsavedChanges = useCallback((targetTabId?: string, onDecision?: (confirmed: boolean) => void) => {
+        const target = tabsRef.current.find(tab => tab.id === (targetTabId ?? activeIdRef.current));
+        if (!target?.isDirty) {
+            onDecision?.(true);
+            return;
+        }
+
+        setConfirmState({
+            open: true,
+            title: L.unsavedChangesTitle,
+            message: L.unsavedChangesMessage,
+            confirmLabel: L.discardChanges,
+            cancelLabel: L.cancel,
+            variant: 'warning',
+            onConfirm: () => {
+                setConfirmState(null);
+                onDecision?.(true);
+            },
+            onCancel: () => {
+                setConfirmState(null);
+                onDecision?.(false);
+            },
+        });
+    }, [activeIdRef, L, tabsRef]);
+
+    const handleOpenFile = useCallback(() => {
+        return new Promise<void>(resolve => {
+            confirmUnsavedChanges(undefined, confirmed => {
+                if (!confirmed) {
+                    resolve();
+                    return;
+                }
+                handleOpenFileBase().finally(() => resolve());
+            });
+        });
+    }, [confirmUnsavedChanges, handleOpenFileBase]);
 
     const { handleExportPng } = usePsdExport(canvasRef, psd, settings, showToast, L);
 
@@ -164,17 +203,23 @@ const PsdEditor = () => {
     }, [exportButtonLabel, settings.language]);
 
     const handleNewTab = useCallback(() => {
-        tabManager.openNewTab();
-        // useTabSync が activeId 変化を検知して状態を復元するので
-        // ここでは openNewTab だけ呼べばよい
-    }, [tabManager]);
+        confirmUnsavedChanges(undefined, confirmed => {
+            if (!confirmed) return;
+            tabManager.openNewTab();
+            // useTabSync が activeId 変化を検知して状態を復元するので
+            // ここでは openNewTab だけ呼べばよい
+        });
+    }, [confirmUnsavedChanges, tabManager]);
 
     // タブを閉じる。
     // 重要：ここでは resetHistory などの state 操作を一切行わない。
     // closeTab → activeId が変わる → useTabSync の useLayoutEffect が発火して
     // すべての状態復元を行う、という一本化した流れにする。
     const handleCloseTab = useCallback((id: string) => {
-        const currentTabs = tabsRef.current;
+        confirmUnsavedChanges(id, confirmed => {
+            if (!confirmed) return;
+
+            const currentTabs = tabsRef.current;
 
         if (currentTabs.length === 1) {
             // 最後の1枚: 空タブにリセットして閉じる
@@ -195,14 +240,66 @@ const PsdEditor = () => {
             }
         }
 
-        // activeId が変わるので useTabSync の useLayoutEffect が
-        // 次のアクティブタブの状態をすべて復元する
-        tabManager.closeTab(id);
+            // activeId が変わるので useTabSync の useLayoutEffect が
+            // 次のアクティブタブの状態をすべて復元する
+            tabManager.closeTab(id);
+        });
     }, [
         tabsRef, tabManager, resetHistory,
         setCurrentFilePath, setFlipX, setFlipY, setClosedKeys,
         setSearchQuery, setZoomInputActive, applyZoom, scrollRef, SCROLL_AREA,
     ]);
+
+    useEffect(() => {
+        // Web fallback: beforeunload for browser environments
+        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+            const hasUnsavedChanges = tabsRef.current.some(tab => tab.isDirty);
+            if (!hasUnsavedChanges) return;
+            event.preventDefault();
+            event.returnValue = '';
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        // Tauri: intercept the native close button / OS quit
+        let unlisten: (() => void) | undefined;
+        (async () => {
+            try {
+                const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+                const appWindow = getCurrentWebviewWindow();
+                unlisten = await appWindow.onCloseRequested(async (event) => {
+                    const hasUnsavedChanges = tabsRef.current.some(tab => tab.isDirty);
+                    if (!hasUnsavedChanges) return; // close proceeds normally
+
+                    event.preventDefault(); // stop the window from closing
+
+                    // Show our custom confirm dialog
+                    setConfirmState({
+                        open: true,
+                        title: L.quitTitle,
+                        message: L.quitMessage,
+                        confirmLabel: L.quitDiscard,
+                        cancelLabel: L.cancel,
+                        variant: 'danger',
+                        onConfirm: async () => {
+                            setConfirmState(null);
+                            // Force close without triggering close-requested again
+                            await appWindow.destroy();
+                        },
+                        onCancel: () => {
+                            setConfirmState(null);
+                        },
+                    });
+                });
+            } catch {
+                // Not in Tauri environment, beforeunload handles it
+            }
+        })();
+
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            unlisten?.();
+        };
+    }, [tabsRef, L]);
 
     return (
         <div
@@ -287,6 +384,19 @@ const PsdEditor = () => {
 
             {ui.notification && (
                 <Toast message={ui.notification.message} type={ui.notification.type} onClose={ui.handleCloseNotification} />
+            )}
+
+            {confirmState && (
+                <ConfirmModal
+                    isOpen={!!confirmState}
+                    title={confirmState.title}
+                    message={confirmState.message}
+                    confirmLabel={confirmState.confirmLabel}
+                    cancelLabel={confirmState.cancelLabel}
+                    variant={confirmState.variant}
+                    onConfirm={confirmState.onConfirm}
+                    onCancel={confirmState.onCancel}
+                />
             )}
 
             {favoriteDialog && (
