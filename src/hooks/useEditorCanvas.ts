@@ -151,7 +151,9 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
         };
 
         if (currentPsd.children) {
+            const tDraw0 = performance.now();
             drawLayers(currentPsd.children);
+            console.info(`[useEditorCanvas] drawLayers: ${(performance.now() - tDraw0).toFixed(0)}ms`); 
         } else if (currentPsd._bitmap) {
             try {
                 ctx.drawImage(currentPsd._bitmap, 0, 0);

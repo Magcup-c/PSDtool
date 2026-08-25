@@ -19,7 +19,7 @@ import { Translations } from '../constants/translations';
 
 interface UsePsdLoaderProps {
     tabManager: any;
-    loadPsd: (buffer: ArrayBuffer) => Promise<any>;
+    loadPsd: (buffer: ArrayBuffer, onMeta?: (psd: any) => void) => Promise<any>;
     addRecentFile: (path: string) => void;
     showToast: (message: string, type?: 'success' | 'error') => void;
     L: Translations;
@@ -49,6 +49,7 @@ export const usePsdLoader = ({
     const isFirstLoadRef  = useRef(true);
 
     const loadPsdFromFilePath = useCallback(async (filePath: string, tabId?: string) => {
+        const tFuncStart = performance.now();
         if (tabManager.activateExistingTab(filePath)) return;
 
         const targetId = tabId ?? tabManager.openNewTab({
@@ -67,7 +68,7 @@ export const usePsdLoader = ({
         /** 現在も同じ世代でこのタブへのロードが有効かを確認 */
         const tabStillTargeted = () => loadGenByTabRef.current.get(targetId) === g;
 
-        try {
+                try {
             let data: { buffer: ArrayBuffer };
             try {
                 data = await readFile(filePath);
@@ -83,29 +84,38 @@ export const usePsdLoader = ({
                 throw new Error(`File "${filePath}" is empty`);
             }
 
-            const result = await loadPsd(data.buffer);
+            // ① メタ情報（レイヤーツリー・表示状態）が届いた時点で先に反映する。
+            //    まだサムネイルは無いが、キャンバス描画とレイヤー一覧はすぐ見える。
+            const result = await loadPsd(data.buffer, (metaPsd) => {
+                if (!tabStillTargeted()) return;
+                const rawMetaPsd = metaPsd as unknown as PsdRoot;
+                if (activeIdRef.current === targetId) resetHistory(rawMetaPsd);
+                tabManager.updateTab(targetId, {
+                    psd: rawMetaPsd,
+                    filePath,
+                    fileName: filePath.replace(/\\/g, '/').split('/').pop() ?? filePath,
+                    isDirty: false,
+                });
+            });
 
             if (!tabStillTargeted()) return;
-            if (!result?.psd) {
-                throw new Error('Worker returned an invalid PSD result');
-            }
 
             // ★ 実データを持つはずのレイヤーが1つもビットマップ化できなかった場合は
             //    ファイル破損等の可能性が高いため、読み込み失敗として扱う。
-            //    既存のcatchブロックに任せることで、タブを閉じる/空に戻す処理も統一される。
-            const diag = result.diag; // any キャスト不要に
+            const diag = result.diag;
             if (diag && diag.totalLeaf > 0 && diag.rendered === 0) {
                 throw new Error(L.layerRenderFailed as string);
             }
 
-            const rawPsd = result.psd as unknown as PsdRoot;
-            const nextPsd = result.layers.length > 0
-                ? attachThumbs(rawPsd, result.layers)
-                : rawPsd;
+            // ② サムネイル用ビットマップが揃ったら、①で反映済みのツリーに付与して再反映する。
+            const metaPsdInTab = tabsRef.current.find(t => t.id === targetId)?.psd as PsdRoot | undefined;
+            const nextPsd = metaPsdInTab && result.layers.length > 0
+                ? attachThumbs(metaPsdInTab, result.layers)
+                : metaPsdInTab ?? null;
 
             if (!tabStillTargeted()) return;
 
-            if (activeIdRef.current === targetId) resetHistory(nextPsd);
+            if (activeIdRef.current === targetId && nextPsd) resetHistory(nextPsd);
 
             tabManager.updateTab(targetId, {
                 psd: nextPsd,
@@ -116,6 +126,7 @@ export const usePsdLoader = ({
             });
             addRecentFile(filePath);
             if (activeIdRef.current === targetId) setCurrentFilePath(filePath);
+            console.info(`[usePsdLoader] TOTAL (readFile〜UI反映完了): ${(performance.now() - tFuncStart).toFixed(0)}ms`); 
 
         } catch (err) {
             if (tabStillTargeted()) {

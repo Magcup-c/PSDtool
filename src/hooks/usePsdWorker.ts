@@ -9,12 +9,12 @@ import type { WorkerRequest, WorkerResponse, LayerThumbEntry } from '../workers/
 import PsdWorker from '../workers/psdWorker?worker';
 
 export interface PsdLoadResult {
-    psd: Psd;
     layers: LayerThumbEntry[];
-    diag?: { totalLeaf: number; eligible: number; rendered: number; failed: number }; // ★ 追加
+    diag?: { totalLeaf: number; eligible: number; rendered: number; failed: number };
 }
 
 interface PendingEntry {
+    onMeta?: (psd: Psd) => void;
     resolve: (result: PsdLoadResult) => void;
     reject:  (err: Error) => void;
 }
@@ -28,16 +28,23 @@ export function usePsdWorker() {
         const worker = new PsdWorker();
 
         worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
-            const { id, psd, layers, error, diag } = event.data; // ★ diag を受け取る
-            const pending = pendingRef.current.get(id);
+            const data = event.data;
+            const pending = pendingRef.current.get(data.id);
             if (!pending) return;
-            pendingRef.current.delete(id);
 
-            if (error) {
-                pending.reject(new Error(error));
+            if (data.kind === 'error') {
+                pendingRef.current.delete(data.id);
+                pending.reject(new Error(data.error));
                 return;
             }
-            pending.resolve({ psd, layers, diag }); // ★ diag を渡す
+            if (data.kind === 'meta') {
+                // メタ情報はまだ完了ではないので pendingRef は残したまま通知のみ行う
+                pending.onMeta?.(data.psd);
+                return;
+            }
+            // data.kind === 'layers' → 完了
+            pendingRef.current.delete(data.id);
+            pending.resolve({ layers: data.layers, diag: data.diag });
         };
 
         worker.onerror = (event: ErrorEvent) => {
@@ -66,8 +73,12 @@ export function usePsdWorker() {
         };
     }, []);
 
+    /**
+     * @param onMeta レイヤーツリー（構造・表示状態）が確定した時点で呼ばれる。
+     *               サムネイル用ビットマップの生成完了は待たない。
+     */
     const loadPsd = useCallback(
-        (buffer: ArrayBuffer): Promise<PsdLoadResult> => {
+        (buffer: ArrayBuffer, onMeta?: (psd: Psd) => void): Promise<PsdLoadResult> => {
             return new Promise((resolve, reject) => {
                 const worker = workerRef.current;
                 if (!worker) {
@@ -80,7 +91,7 @@ export function usePsdWorker() {
                 }
 
                 const id = nextIdRef.current++;
-                pendingRef.current.set(id, { resolve, reject });
+                pendingRef.current.set(id, { onMeta, resolve, reject });
 
                 const request: WorkerRequest = { id, buffer };
                 try {

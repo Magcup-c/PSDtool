@@ -21,41 +21,35 @@ export interface LayerThumbEntry {
     top: number;
 }
 
-export interface WorkerResponse {
+export interface WorkerMetaResponse {
     id: number;
+    kind: 'meta';
     psd: Psd;
+}
+
+export interface WorkerLayersResponse {
+    id: number;
+    kind: 'layers';
     layers: LayerThumbEntry[];
-    error?: string;
-    diag?: { totalLeaf: number; eligible: number; rendered: number; failed: number };
+    diag: { totalLeaf: number; eligible: number; rendered: number; failed: number };
 }
 
-function normalizeRadioGroups(layers: PsdLayerNode[]): PsdLayerNode[] {
-    const processed = layers.map((layer) =>
-        layer.children && layer.children.length > 0
-            ? { ...layer, children: normalizeRadioGroups(layer.children) }
-            : layer,
-    );
-    const radioIndices = processed
-        .map((l, i) => ({ l, i }))
-        .filter(({ l }) => (l.name || '').startsWith('*'))
-        .map(({ i }) => i);
-    if (radioIndices.length < 2) return processed;
-    const visibleIdx =
-        radioIndices.find((i) => !processed[i].hidden) ?? radioIndices[0];
-    const normalized = [...processed];
-    radioIndices.forEach((i) => {
-        normalized[i] = { ...normalized[i], hidden: i !== visibleIdx };
-    });
-    return normalized;
+export interface WorkerErrorResponse {
+    id: number;
+    kind: 'error';
+    error: string;
 }
 
-function stripCanvas(layers: PsdLayerNode[]): void {
-    for (const layer of layers) {
-        if ('canvas' in layer) delete layer.canvas;
-        if (layer.children?.length) stripCanvas(layer.children);
-    }
+export type WorkerResponse = WorkerMetaResponse | WorkerLayersResponse | WorkerErrorResponse;
+
+interface CanvasTask {
+    key: string;
+    canvas: OffscreenCanvas;
+    left: number;
+    top: number;
 }
 
+// ── 安全網: 構造化クローン失敗時のみ使う深い探索 ──────────────────────────────
 function stripOffscreenCanvasDeep(target: any, seen = new Set<any>()): void {
     if (!target || typeof target !== 'object') return;
     if (seen.has(target)) return;
@@ -65,7 +59,6 @@ function stripOffscreenCanvasDeep(target: any, seen = new Set<any>()): void {
         for (const item of target) stripOffscreenCanvasDeep(item, seen);
         return;
     }
-
     for (const key of Object.keys(target)) {
         const value = (target as any)[key];
         if (typeof OffscreenCanvas !== 'undefined' && value instanceof OffscreenCanvas) {
@@ -76,67 +69,75 @@ function stripOffscreenCanvasDeep(target: any, seen = new Set<any>()): void {
     }
 }
 
-async function canvasToBitmaps(
-    canvas: OffscreenCanvas,
-): Promise<{ bitmap: ImageBitmap }> {
-    const bitmap = await createImageBitmap(canvas);
-    return { bitmap };
-}
-
-async function collectLayerBitmaps(
+/**
+ * 1回のツリー走査で以下を同時に行う。
+ * (旧: normalizeRadioGroups → collectLayerBitmaps → stripCanvas の3パスをここに統合)
+ *   - ラジオグループ（"*"接頭辞レイヤー）の hidden 再計算
+ *   - canvas を持つ葉レイヤーの収集（非同期ビットマップ変換用にキューへ積む）
+ *   - layer.canvas の即時削除（postMessage の構造化クローン対象から外す）
+ *
+ * ビットマップ化自体はここでは行わない（同期処理のみ）。
+ * これにより「レイヤー名・表示状態・寸法などのメタ情報」を確定させた時点で
+ * すぐにメインスレッドへ送信でき、サムネイル生成の完了を待たなくてよくなる。
+ */
+function buildTree(
     layers: PsdLayerNode[],
-    parentPath: number[] = [],
-): Promise<{ entries: LayerThumbEntry[]; totalLeaf: number; eligible: number; failed: number }> {
-    const directTasks: Promise<LayerThumbEntry | null>[] = [];
-    const childTasks: Promise<{ entries: LayerThumbEntry[]; totalLeaf: number; eligible: number; failed: number }>[] = [];
-    let totalLeafHere = 0;
-    let eligibleHere = 0;
-    let failedHere = 0;
+    parentPath: number[],
+    canvasTasks: CanvasTask[],
+    diag: { totalLeaf: number; eligible: number },
+): PsdLayerNode[] {
+    const radioIndices = layers
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => (l.name || '').startsWith('*'))
+        .map(({ i }) => i);
+    const visibleIdx = radioIndices.length >= 2
+        ? (radioIndices.find((i) => !layers[i].hidden) ?? radioIndices[0])
+        : -1;
 
-    layers.forEach((layer, i) => {
+    return layers.map((layer, i) => {
         const key = [...parentPath, i].join('-');
         const isLeaf = !layer.children?.length;
+        const next: PsdLayerNode = { ...layer };
+
+        if (radioIndices.length >= 2 && radioIndices.includes(i)) {
+            next.hidden = i !== visibleIdx;
+        }
 
         if (isLeaf) {
-            totalLeafHere++;
-            if (layer.canvas) {
-                eligibleHere++;
-                const canvas = layer.canvas as OffscreenCanvas;
-                const left = layer.left ?? 0;
-                const top  = layer.top  ?? 0;
-                directTasks.push(
-                    canvasToBitmaps(canvas)
-                        .then(({ bitmap }) => ({ key, bitmap, left, top }))
-                        .catch((err) => {
-                            failedHere++;
-                            // 実変換エラーは個別に見えた方が調査しやすいので残す
-                            console.warn(`[psdWorker] bitmap変換失敗 layer="${layer.name}" key=${key}:`, err);
-                            return null;
-                        }),
-                );
+            diag.totalLeaf++;
+            if (next.canvas) {
+                diag.eligible++;
+                canvasTasks.push({
+                    key,
+                    canvas: next.canvas as OffscreenCanvas,
+                    left: next.left ?? 0,
+                    top: next.top ?? 0,
+                });
+                delete next.canvas;
             }
-            // canvas が無いケース（非表示レイヤー等でデータ未保存）は
-            // 個別ログを出さず件数だけ集計する。単発では正常な現象のため。
+        } else if (next.children?.length) {
+            next.children = buildTree(next.children, [...parentPath, i], canvasTasks, diag);
         }
-        if (layer.children?.length) {
-            childTasks.push(collectLayerBitmaps(layer.children, [...parentPath, i]));
-        }
+
+        return next;
     });
+}
 
-    const [directs, children] = await Promise.all([
-        Promise.all(directTasks),
-        Promise.all(childTasks),
-    ]);
-
-    return {
-        entries: [
-            ...directs.filter((e): e is LayerThumbEntry => e !== null),
-            ...children.flatMap(c => c.entries),
-        ],
-        totalLeaf: totalLeafHere + children.reduce((acc, c) => acc + c.totalLeaf, 0),
-        eligible:  eligibleHere  + children.reduce((acc, c) => acc + c.eligible, 0),
-        failed:    failedHere    + children.reduce((acc, c) => acc + c.failed, 0),
-    };
+async function convertCanvasTasks(
+    tasks: CanvasTask[],
+): Promise<{ entries: LayerThumbEntry[]; failed: number }> {
+    let failed = 0;
+    const entries = await Promise.all(tasks.map(async ({ key, canvas, left, top }) => {
+        try {
+            const bitmap = await createImageBitmap(canvas);
+            return { key, bitmap, left, top } as LayerThumbEntry;
+        } catch (err) {
+            failed++;
+            console.warn(`[psdWorker] bitmap変換失敗 key=${key}:`, err);
+            return null;
+        }
+    }));
+    return { entries: entries.filter((e): e is LayerThumbEntry => e !== null), failed };
 }
 
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
@@ -145,36 +146,45 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     try {
         const psd = readPsd(new Uint8Array(buffer), {
             skipLayerImageData: false,
-            skipCompositeImageData: false,
+            // 合成描画は自前(useEditorCanvas)で行っており、
+            // psd.rgba() / 埋め込み合成画像は使わないためデコードをスキップし高速化する。
+            skipCompositeImageData: true,
         });
 
+        const canvasTasks: CanvasTask[] = [];
+        const diag = { totalLeaf: 0, eligible: 0 };
+
         if (psd.children) {
-            psd.children = normalizeRadioGroups(psd.children);
+            psd.children = buildTree(psd.children, [], canvasTasks, diag);
+        }
+        if ('canvas' in (psd as any)) delete (psd as any).canvas;
+
+        // ① メタ情報（レイヤー名・表示状態・寸法など）を即座に送信。
+        //    サムネイル用ビットマップの生成完了を待たない。
+        const metaResponse: WorkerMetaResponse = { id, kind: 'meta', psd };
+        try {
+            (self as any).postMessage(metaResponse);
+        } catch {
+            // 構造化クローン失敗（未知の canvas 参照が残っていた等）時のみ
+            // コストの高い深い探索でフォールバックして再送する。
+            stripOffscreenCanvasDeep(psd);
+            (self as any).postMessage(metaResponse);
         }
 
-        const { entries: layers, totalLeaf, eligible, failed } = psd.children
-            ? await collectLayerBitmaps(psd.children)
-            : { entries: [], totalLeaf: 0, eligible: 0, failed: 0 };
+        // ② サムネイル用ビットマップは非同期に変換し、できてから送信。
+        const { entries: layers, failed } = await convertCanvasTasks(canvasTasks);
 
-        // 要約は1行だけ。個別レイヤーのログは出さない。
-        console.info(`[psdWorker] レイヤー解析: 総数=${totalLeaf} canvas有=${eligible} 変換成功=${layers.length} 変換失敗=${failed}`);
+        console.info(`[psdWorker] レイヤー解析: 総数=${diag.totalLeaf} canvas有=${diag.eligible} 変換成功=${layers.length} 変換失敗=${failed}`);
 
-        if (psd.children) stripCanvas(psd.children);
-        if ('canvas' in (psd as any)) delete (psd as any).canvas;
-        stripOffscreenCanvasDeep(psd);
-
-        const transferables: Transferable[] = layers.map((e) => e.bitmap);
-
-        const response: WorkerResponse = {
-            id, psd, layers,
-            diag: { totalLeaf, eligible, rendered: layers.length, failed },
+        const layersResponse: WorkerLayersResponse = {
+            id, kind: 'layers', layers,
+            diag: { totalLeaf: diag.totalLeaf, eligible: diag.eligible, rendered: layers.length, failed },
         };
-        (self as any).postMessage(response, transferables);
+        const transferables: Transferable[] = layers.map((e) => e.bitmap);
+        (self as any).postMessage(layersResponse, transferables);
     } catch (err) {
-        const response: WorkerResponse = {
-            id,
-            psd: {} as Psd,
-            layers: [],
+        const response: WorkerErrorResponse = {
+            id, kind: 'error',
             error: err instanceof Error ? err.message : String(err),
         };
         (self as any).postMessage(response);
