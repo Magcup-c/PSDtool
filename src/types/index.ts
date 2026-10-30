@@ -10,6 +10,26 @@ export interface PsdLayerNode {
     hidden?: boolean;
     opacity?: number;
     blendMode?: BlendMode;
+    clipping?: boolean;
+    mask?: {
+        top?: number;
+        left?: number;
+        bottom?: number;
+        right?: number;
+        disabled?: boolean;
+        defaultColor?: number;
+        positionRelativeToLayer?: boolean;
+        userMaskDensity?: number;
+        userMaskFeather?: number;
+        vectorMaskDensity?: number;
+        vectorMaskFeather?: number;
+        fromVectorData?: boolean;
+        _maskBitmap?: ImageBitmap;
+        canvas?: HTMLCanvasElement | any;
+    };
+    adjustment?: any;
+    placedLayer?: any;
+    fillOpacity?: number;
     left?: number;
     top?: number;
     right?: number;
@@ -26,7 +46,17 @@ export interface PsdRoot {
     width: number;
     height: number;
     children: PsdLayerNode[];
+    colorMode?: number;
+    bitsPerChannel?: number;
+    _colorPipeline?: {
+        mode: string;
+        bitsPerChannel: number;
+        canUseCanvasRgb8: boolean;
+        reason?: string;
+    };
     _bitmap?: ImageBitmap;
+    /** Photoshop's saved composite, used when the browser renderer cannot reproduce a feature. */
+    _useCompositeFallback?: boolean;
 }
 
 export interface SearchResult {

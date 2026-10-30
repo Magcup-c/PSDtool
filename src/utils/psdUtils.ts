@@ -6,6 +6,7 @@ export interface LayerThumbEntry {
     bitmap: ImageBitmap;
     left: number;
     top: number;
+    kind?: 'layer' | 'mask';
 }
 
 export function getLayersAtPath(children: PsdLayerNode[], parentPath: number[]): PsdLayerNode[] {
@@ -23,17 +24,22 @@ export function getLayersAtPath(children: PsdLayerNode[], parentPath: number[]):
 export function attachThumbs(psd: PsdRoot, entries: LayerThumbEntry[]): PsdRoot {
     const map = new Map<string, ImageBitmap>();
     for (const e of entries) {
-        map.set(e.key, e.bitmap);
+        map.set(`${e.kind === 'mask' ? 'mask:' : ''}${e.key}`, e.bitmap);
     }
 
     function walk(nodes: PsdLayerNode[], parentPath: number[]): PsdLayerNode[] {
         return nodes.map((layer, i) => {
             const key = [...parentPath, i].join('-');
             const bitmap = map.get(key);
+            const maskBitmap = map.get(`mask:${key}`);
 
-            const next: PsdLayerNode = bitmap != null
-                ? { ...layer, _bitmap: bitmap }
-                : { ...layer };
+            const next: PsdLayerNode = {
+                ...layer,
+                ...(bitmap != null ? { _bitmap: bitmap } : {}),
+                ...(maskBitmap != null && layer.mask
+                    ? { mask: { ...layer.mask, _maskBitmap: maskBitmap } }
+                    : {}),
+            };
 
             if (Array.isArray(next.children)) {
                 next.children = walk(next.children, [...parentPath, i]);

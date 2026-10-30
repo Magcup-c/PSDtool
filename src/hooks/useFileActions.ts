@@ -40,6 +40,16 @@ async function withRebuiltCanvases(layers: PsdLayerNode[]): Promise<PsdLayerNode
             }
         }
 
+        if (layer.mask?._maskBitmap) {
+            const bmp = layer.mask._maskBitmap;
+            const maskCanvas = new OffscreenCanvas(bmp.width, bmp.height);
+            const maskCtx = maskCanvas.getContext('2d');
+            if (maskCtx) {
+                maskCtx.drawImage(bmp, 0, 0);
+                next.mask = { ...layer.mask, canvas: maskCanvas };
+            }
+        }
+
         return next;
     }));
 }

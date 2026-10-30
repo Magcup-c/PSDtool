@@ -83,7 +83,13 @@ export function usePsdHistory(
         redoStack.current.forEach(p => scheduleOrphanClose(p));
         redoStack.current = [];
 
-        applyPsd(nextPsd);
+        // 大規模PSDはロード直後だけ保存済み合成画像を使う。編集が
+        // 確定したら、変更結果を表示するため自前合成へ切り替える。
+        // ImageBitmap自体は共有したままなので、ここで画像を複製しない。
+        const editablePsd = nextPsd._useCompositeFallback && nextPsd._bitmap
+            ? { ...nextPsd, _useCompositeFallback: false }
+            : nextPsd;
+        applyPsd(editablePsd);
         syncHistoryState();
     }, [syncHistoryState, scheduleOrphanClose, applyPsd]);
 

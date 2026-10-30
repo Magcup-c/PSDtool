@@ -10,6 +10,8 @@ import PsdWorker from '../workers/psdWorker?worker';
 
 export interface PsdLoadResult {
     layers: LayerThumbEntry[];
+    composite?: ImageBitmap;
+    useCompositeFallback: boolean;
     diag?: { totalLeaf: number; eligible: number; rendered: number; failed: number };
 }
 
@@ -44,19 +46,28 @@ export function usePsdWorker() {
             }
             // data.kind === 'layers' → 完了
             pendingRef.current.delete(data.id);
-            pending.resolve({ layers: data.layers, diag: data.diag });
+            pending.resolve({
+                layers: data.layers,
+                composite: data.composite,
+                useCompositeFallback: data.useCompositeFallback,
+                diag: data.diag,
+            });
         };
 
         worker.onerror = (event: ErrorEvent) => {
             const err = new Error(
-                event.message ? `Worker error: ${event.message}` : 'Unknown worker error'
+                event.message
+                    ? `Worker error: ${event.message} (${event.filename || 'psdWorker'}:${event.lineno || 0})`
+                    : 'Unknown worker error'
             );
+            console.error('[usePsdWorker] worker error', event);
             pendingRef.current.forEach(({ reject }) => reject(err));
             pendingRef.current.clear();
         };
 
         worker.onmessageerror = () => {
             const err = new Error('Worker message deserialization error');
+            console.error('[usePsdWorker] worker message deserialization error');
             pendingRef.current.forEach(({ reject }) => reject(err));
             pendingRef.current.clear();
         };

@@ -86,9 +86,13 @@ export const usePsdLoader = ({
 
             // ① メタ情報（レイヤーツリー・表示状態）が届いた時点で先に反映する。
             //    まだサムネイルは無いが、キャンバス描画とレイヤー一覧はすぐ見える。
+            //    Reactのstate反映は非同期なので、後段でtabsRefを読み直さず、
+            //    このローカル参照を最終PSDの基準にする。
+            let metaPsdForLoad: PsdRoot | null = null;
             const result = await loadPsd(data.buffer, (metaPsd) => {
                 if (!tabStillTargeted()) return;
                 const rawMetaPsd = metaPsd as unknown as PsdRoot;
+                metaPsdForLoad = rawMetaPsd;
                 if (activeIdRef.current === targetId) resetHistory(rawMetaPsd);
                 tabManager.updateTab(targetId, {
                     psd: rawMetaPsd,
@@ -103,15 +107,21 @@ export const usePsdLoader = ({
             // ★ 実データを持つはずのレイヤーが1つもビットマップ化できなかった場合は
             //    ファイル破損等の可能性が高いため、読み込み失敗として扱う。
             const diag = result.diag;
-            if (diag && diag.totalLeaf > 0 && diag.rendered === 0) {
+            if (diag && diag.totalLeaf > 0 && diag.rendered === 0 && !result.composite) {
                 throw new Error(L.layerRenderFailed as string);
             }
 
             // ② サムネイル用ビットマップが揃ったら、①で反映済みのツリーに付与して再反映する。
-            const metaPsdInTab = tabsRef.current.find(t => t.id === targetId)?.psd as PsdRoot | undefined;
-            const nextPsd = metaPsdInTab && result.layers.length > 0
+            const metaPsdInTab = metaPsdForLoad
+                ?? (tabsRef.current.find(t => t.id === targetId)?.psd as PsdRoot | undefined)
+                ?? null;
+            const nextPsd = metaPsdInTab
                 ? attachThumbs(metaPsdInTab, result.layers)
-                : metaPsdInTab ?? null;
+                : null;
+            if (nextPsd && result.composite) {
+                nextPsd._bitmap = result.composite;
+                nextPsd._useCompositeFallback = result.useCompositeFallback;
+            }
 
             if (!tabStillTargeted()) return;
 
