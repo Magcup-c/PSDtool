@@ -80,7 +80,7 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
     //   drawCanvas()        → psdRef.current を使用（タブ切り替えなど）
     //   drawCanvas(somePsd) → somePsd を使用
     //   drawCanvas(null)    → 何もしない（将来のクリア用途を安全にブロック）
-    const drawCanvas = useCallback((targetPsd: any = USE_PSD_REF) => {
+    const drawCanvas = useCallback((targetPsd: any = USE_PSD_REF, force = false) => {
         const canvas = canvasRef.current;
         if (!canvas || !canvas.isConnected) return;
 
@@ -132,7 +132,7 @@ export const useEditorCanvas = (psd: any, psdRef: React.MutableRefObject<any>) =
         const previousDraw = lastDrawRef.current;
         if (previousDraw && previousDraw.psd === currentPsd &&
             previousDraw.flipX === fx && previousDraw.flipY === fy &&
-            previousDraw.flipEnabled === fe && !drawDirtyRef.current) {
+            previousDraw.flipEnabled === fe && !drawDirtyRef.current && !force) {
             return;
         }
         lastDrawRef.current = { psd: currentPsd, flipX: fx, flipY: fy, flipEnabled: fe };

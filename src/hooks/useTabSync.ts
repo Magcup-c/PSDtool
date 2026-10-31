@@ -27,7 +27,7 @@ interface UseTabSyncProps {
     renameSessionRef: React.MutableRefObject<boolean>;
     renameTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
     psd: PsdRoot | null;
-    drawCanvas: (psd?: PsdRoot | null) => void;
+    drawCanvas: (psd?: PsdRoot | null, force?: boolean) => void;
 }
 
 interface PendingRestore {
@@ -131,7 +131,7 @@ export const useTabSync = ({
                     el.scrollTop = pending.scrollTop;
                 }
                 if (pending.psd) {
-                    drawCanvas(pending.psd);
+                    drawCanvas(pending.psd, true);
                 }
             });
 
@@ -180,7 +180,7 @@ export const useTabSync = ({
             }
 
             if (pending.psd) {
-                drawCanvas(pending.psd);
+                drawCanvas(pending.psd, true);
             }
         });
 
